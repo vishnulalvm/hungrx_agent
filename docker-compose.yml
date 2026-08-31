@@ -1,0 +1,111 @@
+# Base compose file — prod-leaning defaults shared by every environment.
+#
+# Local development: `docker compose up` — docker-compose.override.yml is
+# picked up automatically and layers on hot reload, bind mounts, and
+# published ports for the dev tools.
+#
+# Production: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+# — explicitly opts out of the override file and layers on resource limits,
+# restart policies, and replica counts instead.
+#
+# All services share one internal bridge network (`hungrx_network`) and talk
+# to each other by service name (e.g. api -> postgres, worker -> redis).
+# Nothing but the services intentionally exposed to the host binds a port
+# here in the base file.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file: .env
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - hungrx_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-hungrx}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis_data:/data
+      - ./infrastructure/queue/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - hungrx_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: prod
+    env_file: .env
+    networks:
+      - hungrx_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+      target: prod
+    env_file: .env
+    networks:
+      - hungrx_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  admin-dashboard:
+    build:
+      context: apps/admin-dashboard
+      dockerfile: Dockerfile
+      target: prod
+    env_file: .env
+    networks:
+      - hungrx_network
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  hungrx_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

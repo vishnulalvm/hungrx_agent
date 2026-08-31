@@ -1,0 +1,67 @@
+# Dev override — merged automatically on top of docker-compose.yml by plain
+# `docker compose up` / `docker compose up -d`. Not applied in production
+# (production runs with `-f docker-compose.yml -f docker-compose.prod.yml`,
+# which bypasses this file entirely).
+#
+# Adds: published ports for local access, bind-mounted source for hot
+# reload, and the "dev" build target on every custom image.
+
+services:
+  postgres:
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      target: dev
+    volumes:
+      - ./apps/api:/app/apps/api
+      - ./core:/app/core
+      - ./database:/app/database
+      - ./infrastructure:/app/infrastructure
+      - ./langgraph:/app/langgraph
+      - ./pyproject.toml:/app/pyproject.toml
+      - ./uv.lock:/app/uv.lock
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      ENVIRONMENT: development
+
+  worker:
+    build:
+      target: dev
+    volumes:
+      - ./apps/worker:/app/apps/worker
+      - ./core:/app/core
+      - ./database:/app/database
+      - ./infrastructure:/app/infrastructure
+      - ./langgraph:/app/langgraph
+      - ./pyproject.toml:/app/pyproject.toml
+      - ./uv.lock:/app/uv.lock
+    environment:
+      ENVIRONMENT: development
+
+  admin-dashboard:
+    build:
+      target: dev
+    volumes:
+      - ./apps/admin-dashboard/src:/app/src
+      - ./apps/admin-dashboard/public:/app/public
+      - ./apps/admin-dashboard/next.config.mjs:/app/next.config.mjs
+      - ./apps/admin-dashboard/tailwind.config.ts:/app/tailwind.config.ts
+      - ./apps/admin-dashboard/tsconfig.json:/app/tsconfig.json
+      - ./apps/admin-dashboard/components.json:/app/components.json
+      # Anonymous volume so the container's own node_modules (installed for
+      # linux/x86) isn't shadowed by the host's, which may be built for a
+      # different platform (e.g. macOS/arm64).
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      WATCHPACK_POLLING: "true"

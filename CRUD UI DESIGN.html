@@ -1,0 +1,1595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>hungrX — Review</title>
+<style>
+  :root {
+    --ink: #17181c;
+    --ink-soft: #5a6070;
+    --ink-faint: #9aa0ac;
+    --bg: #ffffff;
+    --bg-soft: #f8f9fa;
+    --accent: #1f6feb;
+    --accent-soft: #eaf2ff;
+    /* TWO STATUS COLORS ONLY, per this revision:
+       --ok = confirmed / correct. --attn = needs attention (was amber+red, now one). */
+    --ok: #178a3f;
+    --ok-soft: #e8f7ee;
+    --attn: #d1242f;
+    --attn-soft: #fff0ef;
+    --line: #eef0f2;
+    --line-strong: #e2e5e9;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: var(--sans); color: var(--ink); background: var(--bg); margin: 0; -webkit-font-smoothing: antialiased; }
+  button { font-family: var(--sans); cursor: pointer; }
+  input, select { font-family: var(--sans); }
+
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* ============================================================ */
+  /* SCREEN 1 — ADMIN PANEL                                        */
+  /* ============================================================ */
+  .admin-head { padding: 28px 20px 14px; }
+  .admin-head-row { max-width: 640px; margin: 0 auto; display: flex; align-items: baseline; justify-content: space-between; }
+  .admin-head h1 { font-size: 19px; margin: 0; letter-spacing: -0.01em; font-weight: 700; }
+  .admin-head .admin-sub { font-size: 12.5px; color: var(--ink-faint); margin-top: 3px; }
+  .add-restaurant-btn { height: 32px; font-size: 12.5px; font-weight: 600; padding: 0 13px; background: var(--ink); color: #fff; border: none; border-radius: 8px; }
+  .add-restaurant-btn:hover { background: #000; }
+
+  .type-filters { max-width: 640px; margin: 16px auto 0; padding: 0 20px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .type-filter-chip { font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 100px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink-faint); }
+  .type-filter-chip.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .type-filter-chip:hover:not(.active) { background: var(--bg-soft); }
+
+  .restaurant-list { max-width: 640px; margin: 0 auto; padding: 18px 20px 80px; }
+  .restaurant-card { display: flex; align-items: center; gap: 14px; padding: 15px 6px; border-radius: 10px; }
+  .restaurant-card:hover { background: var(--bg-soft); }
+  .restaurant-logo-wrap { position: relative; flex-shrink: 0; }
+  .restaurant-logo {
+    width: 40px; height: 40px; border-radius: 10px; background: var(--bg-soft);
+    border: 1px solid var(--line-strong); display: flex; align-items: center; justify-content: center;
+    font-size: 18px; cursor: pointer; overflow: hidden;
+  }
+  .restaurant-logo:hover { border-color: var(--accent); }
+  .restaurant-logo img { width: 100%; height: 100%; object-fit: cover; }
+  .restaurant-logo-edit-hint {
+    position: absolute; bottom: -3px; right: -3px; width: 15px; height: 15px; border-radius: 50%;
+    background: var(--ink); color: #fff; font-size: 8px; display: flex; align-items: center; justify-content: center;
+    opacity: 0; border: 1.5px solid #fff; pointer-events: none;
+  }
+  .restaurant-card:hover .restaurant-logo-edit-hint { opacity: 1; }
+
+  /* Small popover for restaurant-logo upload — same "Upload" affordance
+     already used for item photos (imageField), just triggered from the
+     admin card instead of an item row. A real build wires this to a file
+     input; here it accepts a pasted image URL as the dummy-data stand-in. */
+  .logo-upload-popover {
+    position: absolute; z-index: 40; background: #fff; border: 1px solid var(--line-strong);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); padding: 12px; width: 220px;
+  }
+  .logo-upload-popover .popover-label { font-size: 11.5px; color: var(--ink-faint); margin-bottom: 6px; font-weight: 600; }
+  .logo-upload-popover input[type="text"] {
+    width: 100%; height: 30px; font-size: 12.5px; border: 1px solid var(--line-strong); border-radius: 6px; padding: 0 8px; margin-bottom: 8px;
+  }
+  .logo-upload-popover .popover-actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .popover-btn { height: 28px; font-size: 12px; padding: 0 11px; border-radius: 6px; border: 1px solid var(--line-strong); background: #fff; }
+  .popover-btn:hover { background: var(--bg-soft); }
+  .popover-btn.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .popover-btn.primary:hover { background: #000; }
+  .restaurant-info { flex: 1; min-width: 0; cursor: pointer; }
+  .restaurant-name-row { display: flex; align-items: center; gap: 7px; }
+  .restaurant-name { font-size: 15px; font-weight: 600; }
+  .type-badge {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+    padding: 2px 6px; border-radius: 4px; flex-shrink: 0; border: none; cursor: pointer;
+  }
+  .type-badge.fast_food { background: #fdeee0; color: #a04b00; }
+  .type-badge.cafe { background: #eee5da; color: #6b4a1f; }
+  .type-badge.fast_casual { background: #e6eefc; color: #1a4fa0; }
+  .type-badge.fine_dining { background: #f1e9f7; color: #6a2f9e; }
+  .type-badge.bakery { background: #fbe9ee; color: #a02456; }
+  .type-badge.bar { background: #e5ecec; color: #2d5555; }
+  .type-badge.other { background: var(--bg-soft); color: var(--ink-faint); }
+  .type-badge:hover { filter: brightness(0.95); }
+  .update-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 700; color: var(--attn); background: var(--attn-soft); padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
+  .update-pill::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--attn); }
+  .restaurant-meta { font-size: 11.5px; color: var(--ink-faint); margin-top: 3px; font-family: var(--mono); }
+  .restaurant-progress-wrap { text-align: right; flex-shrink: 0; cursor: pointer; }
+  .restaurant-progress-pct { font-size: 13.5px; font-weight: 700; font-family: var(--mono); }
+  .restaurant-progress-pct.done { color: var(--ok); }
+  .restaurant-progress-pct.partial { color: var(--attn); }
+  .restaurant-progress-bar { width: 52px; height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 5px; }
+  .restaurant-progress-fill { height: 100%; background: var(--ok); }
+  .restaurant-chevron { font-size: 13px; color: var(--ink-faint); flex-shrink: 0; cursor: pointer; }
+
+  /* Inline type-picker popover, opened by tapping the badge */
+  .type-picker { position: absolute; margin-top: 4px; background: #fff; border: 1px solid var(--line-strong); border-radius: 9px; box-shadow: 0 6px 20px rgba(0,0,0,0.09); padding: 6px; z-index: 30; display: none; }
+  .type-picker.open { display: block; }
+  .type-picker-option { display: block; width: 100%; text-align: left; padding: 7px 10px; font-size: 12.5px; border: none; background: none; border-radius: 6px; color: var(--ink); }
+  .type-picker-option:hover { background: var(--bg-soft); }
+
+  /* Hierarchy inside the category dropdown — a shallow category's own
+     option reads plain; a deep category's optgroup label is bold and its
+     nested subcategory options are visually indented/lighter, so a
+     subcategory reads clearly as "inside" its parent, matching the same
+     depth relationship the category headers already show in the scroll. */
+  .category-move-select optgroup { font-weight: 700; font-style: normal; color: var(--ink-soft); }
+  .category-move-select optgroup option { font-weight: 400; color: var(--ink); padding-left: 6px; }
+
+  /* Full breadcrumb shown at the top of an opened item, so its place in an
+     arbitrarily deep tree (Burgers -> Ginger -> Ginger 65) is immediately
+     readable as plain text — not something a person has to infer from
+     which option happens to be selected in a dropdown. */
+  .item-breadcrumb { font-size: 12px; color: var(--ink-faint); padding: 2px 2px 10px; font-family: var(--mono); }
+  .item-breadcrumb::before { content: "📍 "; }
+
+  .type-picker-other { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+  .type-picker-other-form { display: flex; gap: 5px; padding: 4px 6px 2px; align-items: center; }
+  .type-picker-other-form input[type="text"] { flex: 1; height: 28px; font-size: 12px; border: 1px solid var(--accent); border-radius: 6px; padding: 0 8px; }
+
+  /* ============================================================ */
+  /* SCREEN 2 — REVIEWER                                           */
+  /* ============================================================ */
+  .app-head { position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,0.95); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line-strong); padding: 12px 20px; }
+  .app-head-row { display: flex; align-items: center; gap: 12px; max-width: 640px; margin: 0 auto; }
+  .back-btn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line-strong); background: #fff; font-size: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+  .back-btn:hover { background: var(--bg-soft); }
+  .app-head-titles { flex: 1; min-width: 0; }
+  .app-head h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; font-weight: 700; }
+  .app-head .brand-sub { font-size: 11.5px; color: var(--ink-faint); }
+  .app-progress { font-size: 12.5px; font-family: var(--mono); color: var(--ink-faint); text-align: right; flex-shrink: 0; }
+  .app-progress .count { color: var(--ink); font-weight: 650; }
+  .progress-bar { max-width: 640px; margin: 9px auto 0; height: 2.5px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--ok); transition: width 0.2s; }
+
+  .update-banner { max-width: 640px; margin: 0 auto; padding: 10px 20px; background: var(--attn-soft); border-bottom: 1px solid #f5c9c5; font-size: 12.5px; color: #8c1f27; display: flex; align-items: center; gap: 8px; }
+  .update-banner::before { content: "●"; color: var(--attn); font-size: 8px; }
+
+  /* Menu Structure panel — closed by default, a thin unobtrusive bar. This
+     is the exception-path editor (the pipeline already builds the tree
+     correctly most of the time), so it must not compete visually with the
+     dish list underneath it when collapsed. */
+  .structure-panel-wrap { max-width: 640px; margin: 0 auto; }
+  .structure-panel-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    padding: 11px 20px; background: var(--bg-soft); border: none; border-bottom: 1px solid var(--line-strong);
+    font-size: 13px; font-weight: 650; color: var(--ink-soft);
+  }
+  .structure-panel-toggle:hover { background: #f0f1f3; }
+  .structure-panel-chevron { font-size: 10px; transition: transform 0.15s; color: var(--ink-faint); }
+  .structure-panel-toggle.open .structure-panel-chevron { transform: rotate(90deg); }
+  .structure-panel-hint { font-weight: 400; color: var(--ink-faint); font-size: 12px; }
+
+  .structure-panel-body {
+    background: #fbfbfc; border-bottom: 2px solid var(--ink); padding: 14px 20px 18px;
+  }
+  .structure-node { margin: 2px 0; }
+  .structure-node-row {
+    display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 7px;
+    background: #fff; border: 1px solid var(--line-strong);
+  }
+  .structure-node-row input {
+    flex: 1; border: none; background: none; font-size: 13px; font-weight: 600; color: var(--ink); padding: 2px 0;
+  }
+  .structure-node-row input:focus { outline: none; background: var(--accent-soft); border-radius: 4px; padding: 2px 4px; }
+  .structure-node-count { font-size: 11px; color: var(--ink-faint); font-family: var(--mono); flex-shrink: 0; }
+  .structure-node-add-item-btn {
+    font-size: 11px; color: var(--accent); background: var(--accent-soft); border: none; border-radius: 5px;
+    padding: 4px 8px; flex-shrink: 0; font-weight: 600;
+  }
+  .structure-node-add-item-btn:hover { background: var(--accent); color: #fff; }
+  .structure-children { margin-left: 18px; padding-left: 12px; border-left: 2px solid var(--line-strong); margin-top: 4px; }
+  .structure-add-child-row { margin: 4px 0 4px 18px; padding-left: 12px; border-left: 2px dashed var(--line-strong); }
+  .structure-add-child-btn {
+    font-size: 12px; color: var(--ink-faint); background: none; border: 1px dashed var(--line-strong);
+    border-radius: 6px; padding: 5px 10px; opacity: 0.7;
+  }
+  .structure-add-child-btn:hover { opacity: 1; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .structure-add-root-row { margin-top: 8px; }
+  .update-banner strong { font-weight: 650; }
+
+  .scroll { max-width: 640px; margin: 0 auto; padding: 2px 20px 90px; }
+
+  .category-row { display: flex; align-items: center; gap: 8px; padding: 30px 0 8px; }
+  .category-row:first-child { padding-top: 22px; }
+  .category { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); flex: 1; background: none; border: none; padding: 2px 0; }
+  .name:focus { background: var(--accent-soft); border-radius: 4px; outline: 2px solid var(--accent); color: var(--ink); }
+  .category-action-btn { width: 20px; height: 20px; border-radius: 5px; border: none; background: transparent; color: var(--ink-faint); font-size: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; opacity: 0; transition: opacity 0.1s; }
+  .category-row:hover .category-action-btn, .subcategory-row:hover .category-action-btn { opacity: 1; }
+  .category-action-btn:hover { background: var(--bg-soft); color: var(--ink); }
+  .category-action-btn.delete-btn:hover { background: var(--attn-soft); color: var(--attn); }
+
+  .subcategory-row { display: flex; align-items: center; gap: 6px; padding: 16px 0 3px 14px; border-left: 2px solid var(--line-strong); margin-left: 4px; }
+  .subcategory { font-size: 11.5px; font-weight: 600; color: var(--ink-faint); flex: 1; background: none; border: none; padding: 1px 0; }
+  .subcategory:focus { background: var(--accent-soft); border-radius: 4px; outline: 2px solid var(--accent); color: var(--ink); }
+
+  .add-category-row { padding: 18px 0 6px; display: flex; }
+  .add-category-btn { font-size: 12.5px; color: var(--accent); background: none; border: 1px dashed var(--line-strong); border-radius: 7px; padding: 8px 12px; width: 100%; text-align: left; opacity: 0.6; }
+  .add-category-btn:hover { background: var(--accent-soft); border-color: var(--accent); opacity: 1; }
+
+  /* Shared inline-add form — replaces every native prompt() in this build.
+     Tapping a "+ Add ..." button swaps it for this row in place; Enter or
+     the check button confirms, Escape or the × cancels back to the button.
+     Used for: new category, new item, new macro/micro value, new
+     allergen/ingredient entry — one consistent pattern everywhere. */
+  .inline-add-form { display: flex; gap: 6px; align-items: center; width: 100%; }
+  .inline-add-form input[type="text"] {
+    flex: 1; height: 32px; font-size: 12.5px; border: 1px solid var(--accent); border-radius: 7px; padding: 0 10px;
+  }
+  .inline-add-form input[type="text"]:focus { outline: 2px solid var(--accent-soft); }
+  .inline-add-confirm, .inline-add-cancel {
+    width: 30px; height: 30px; border-radius: 7px; border: 1px solid var(--line-strong); background: #fff;
+    font-size: 13px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  }
+  .inline-add-confirm { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .inline-add-confirm:hover { background: #000; }
+  .inline-add-cancel:hover { background: var(--bg-soft); }
+
+  /* Real elevation on the item currently being worked on — not "3D" in a
+     literal sense, but a genuine surface lift (background + shadow), so the
+     one item in focus is unmistakably separated from its flat, quiet
+     siblings, without turning the whole scroll into a stack of cards. */
+  .item { border-bottom: 1px solid var(--line-strong); transition: box-shadow 0.15s, background 0.15s; }
+  .item:last-child { border-bottom: none; }
+  .item.open {
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(23,24,28,0.06), 0 8px 24px rgba(23,24,28,0.10);
+    border-radius: 12px; border-bottom: none;
+    margin: 4px 0 10px; position: relative; z-index: 1;
+  }
+  .item.open .row { padding-left: 8px; padding-right: 8px; }
+
+  .row { display: flex; align-items: center; gap: 10px; padding: 10px 2px; cursor: pointer; user-select: none; border-radius: 7px; }
+  .row:hover { background: var(--bg-soft); }
+  .item.open .row:hover { background: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot.ok { background: var(--ok); }
+  .dot.attn { background: var(--attn); }
+  .name { font-size: 14.5px; flex: 1; }
+  .summary { font-size: 12.5px; color: var(--ink-faint); font-family: var(--mono); }
+  .flag-count { font-size: 12px; color: var(--attn); font-weight: 650; }
+  .chevron { font-size: 10px; color: var(--ink-faint); transition: transform 0.15s; flex-shrink: 0; width: 12px; text-align: center; }
+  .item.open .chevron { transform: rotate(90deg); }
+
+  /* Pin — overrides auto-collapse for this one item specifically. Sits in
+     the row itself, always visible on an open item so the override is
+     discoverable right where the person needs it, not buried in a menu. */
+  .pin-btn {
+    width: 24px; height: 24px; border-radius: 6px; border: none; background: transparent;
+    color: var(--ink-faint); font-size: 13px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  }
+  .pin-btn:hover { background: var(--bg-soft); color: var(--ink); }
+  .pin-btn.pinned { color: var(--accent); background: var(--accent-soft); }
+
+  .expand { display: none; padding: 6px 2px 18px 17px; }
+  .item.open .expand { display: block; padding-left: 21px; }
+
+  .field-line { display: flex; align-items: center; gap: 9px; padding: 7px 2px; cursor: pointer; border-radius: 6px; }
+  .field-line:hover { background: var(--bg-soft); }
+  .field-line-label { font-size: 12.5px; color: var(--ink-soft); width: 76px; flex-shrink: 0; }
+  .field-line-value { font-size: 12.5px; color: var(--ink-faint); font-family: var(--mono); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .field-line-caret { font-size: 9px; color: var(--ink-faint); opacity: 0; }
+  .field-line:hover .field-line-caret { opacity: 1; }
+
+  /* A field-section's background reflects whether it STILL needs attention
+     (red tint) — the moment every value in it is confirmed, it turns green
+     and, once closed, collapses back to a calm one-line summary. No amber,
+     no "flagged vs clean" as a separate visual system — one state machine. */
+  .field-section { border-radius: 9px; margin: 2px 0; overflow: hidden; }
+  .field-section.needs-attn { background: var(--attn-soft); }
+  .field-section-head { display: flex; align-items: center; gap: 7px; padding: 9px 10px 3px; }
+  .field-section-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; color: var(--ink-faint); flex: 1; }
+  .field-section.needs-attn .field-section-label { color: #92222b; }
+  .field-section-collapse { font-size: 11px; color: var(--ink-faint); background: none; border: none; padding: 2px 4px; }
+  .field-section-collapse:hover { color: var(--ink); }
+
+  .field-reason { font-size: 12.5px; color: #8c1f27; padding: 0 10px 7px; }
+
+  .value-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 6px; padding: 0 10px 9px; }
+  .value-cell { display: flex; flex-direction: column; gap: 2px; }
+  .value-cell-label { font-size: 9.5px; color: var(--ink-faint); font-weight: 600; }
+  .value-cell-input-wrap { display: flex; align-items: center; background: #fff; border: 1px solid var(--line-strong); border-radius: 6px; overflow: hidden; transition: border-color 0.15s, background 0.15s; }
+  .value-cell-input-wrap:focus-within { outline: 2px solid var(--accent); border-color: var(--accent); }
+  .value-cell-input { flex: 1; min-width: 0; height: 29px; font-size: 12.5px; font-family: var(--mono); border: none; padding: 0 5px 0 7px; text-align: right; color: var(--ink); background: transparent; }
+  .value-cell-input:focus { outline: none; }
+  .value-cell-unit { font-size: 10.5px; color: var(--ink-faint); padding: 0 6px 0 2px; font-family: var(--mono); user-select: none; }
+  .field-section.needs-attn .value-cell-input-wrap { border-color: #f0aaa6; }
+
+  /* PER-FIELD CONFIRM — the closing-the-loop checkmark. Sits beside every
+     editable cell/chip in a needs-attn section; clicking it marks that one
+     value confirmed (green) without requiring the whole section be re-typed. */
+  .confirm-check {
+    width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--line-strong);
+    background: #fff; color: transparent; font-size: 13px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; line-height: 1;
+  }
+  .confirm-check:hover { border-color: var(--ok); }
+  .confirm-check.confirmed { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .value-cell-input-wrap.attn-pending { border-color: #f0aaa6; }
+
+  .value-cell.add-cell { justify-content: flex-end; }
+  .add-value-btn { height: 29px; border: 1px dashed var(--line-strong); border-radius: 6px; background: none; color: var(--ink-faint); font-size: 12px; width: 100%; }
+  .add-value-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+  /* entry-list — ONE system for Allergens and Ingredients, always, flagged
+     or not. A conflict shows as an already-present chip styled red until
+     confirmed or removed — never a different control type. */
+  .entry-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 10px 10px; align-items: center; }
+  .entry-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #fff; border: 1px solid var(--line-strong); border-radius: 100px;
+    padding: 5px 6px 5px 11px; font-size: 12.5px; color: var(--ink);
+  }
+  .entry-chip.attn { border-color: var(--attn); background: var(--attn-soft); color: #8c1f27; }
+  .entry-chip-confirm {
+    width: 17px; height: 17px; border-radius: 50%; border: 1.5px solid var(--attn); background: #fff;
+    color: transparent; font-size: 10px; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 1;
+  }
+  .entry-chip-confirm:hover { background: var(--ok-soft); border-color: var(--ok); }
+  .entry-chip-remove {
+    width: 16px; height: 16px; border-radius: 50%; border: none; background: var(--bg-soft);
+    color: var(--ink-faint); font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0;
+  }
+  .entry-chip.attn .entry-chip-remove { background: #fff; }
+  .entry-chip-remove:hover { background: var(--attn-soft); color: var(--attn); }
+  .add-entry-btn { height: 28px; border: 1px dashed var(--line-strong); border-radius: 100px; background: none; color: var(--ink-faint); font-size: 12px; padding: 0 12px; }
+  .add-entry-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+  .single-field-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+  .single-value-wrap { flex: 1; display: flex; align-items: center; background: #fff; border: 1px solid var(--line-strong); border-radius: 6px; transition: border-color 0.15s, background 0.15s; }
+  .single-value-wrap:focus-within { outline: 2px solid var(--accent); border-color: var(--accent); }
+  .single-value-input { flex: 1; height: 30px; font-size: 13px; border: none; padding: 0 9px; color: var(--ink); background: transparent; }
+  .single-value-input:focus { outline: none; }
+
+  .image-row { display: flex; gap: 10px; align-items: center; padding: 8px 10px; }
+  .image-thumb { width: 34px; height: 34px; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; border: 1px solid var(--line-strong); }
+  .upload-btn { height: 26px; font-size: 12px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; flex-shrink: 0; }
+  .upload-btn:hover { background: var(--bg-soft); }
+
+  .confirm-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 4px 2px; margin-top: 8px; border-top: 1px solid var(--line); }
+  .delete-item-btn { font-size: 12px; color: var(--attn); background: none; border: none; padding: 4px 4px; opacity: 0.7; }
+  .delete-item-btn:hover { text-decoration: underline; opacity: 1; }
+  .confirm-row label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-soft); cursor: pointer; }
+  .confirm-row input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; }
+
+  .add-item-row { padding: 10px 0 4px; }
+  .add-item-btn { font-size: 12.5px; color: var(--accent); background: none; border: 1px dashed var(--line-strong); border-radius: 7px; padding: 7px 12px; width: 100%; text-align: left; opacity: 0.6; }
+  .add-item-btn:hover { background: var(--accent-soft); border-color: var(--accent); opacity: 1; }
+
+  .saved-toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(8px);
+    background: var(--ink); color: #fff; font-size: 12.5px; font-weight: 600;
+    padding: 9px 16px; border-radius: 100px; opacity: 0; pointer-events: none;
+    transition: opacity 0.15s, transform 0.15s; z-index: 50;
+  }
+  .saved-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .footer-note { max-width: 640px; margin: 0 auto; padding: 24px 20px 40px; font-size: 12px; color: var(--ink-faint); text-align: center; }
+</style>
+</head>
+<body>
+
+  <div class="screen active" id="screen-admin">
+    <div class="admin-head">
+      <div class="admin-head-row">
+        <div><h1>hungrX Admin</h1><div class="admin-sub">Restaurants awaiting or in review</div></div>
+        <div id="addRestaurantSlot"><button class="add-restaurant-btn" onclick="startAddRestaurant()">+ Add restaurant</button></div>
+      </div>
+    </div>
+    <div class="type-filters" id="typeFilters"></div>
+    <div class="restaurant-list" id="restaurantList"></div>
+  </div>
+
+  <div class="screen" id="screen-reviewer">
+    <div class="app-head">
+      <div class="app-head-row">
+        <button class="back-btn" onclick="goToAdmin()">←</button>
+        <div class="restaurant-logo-wrap" id="reviewerLogoWrap">
+          <div class="restaurant-logo" onclick="openLogoUpload(currentRestaurantKey, this)" title="Tap to upload an image">—</div>
+          <div class="restaurant-logo-edit-hint">✎</div>
+        </div>
+        <div class="app-head-titles"><h1 id="reviewerTitle">—</h1><div class="brand-sub" id="reviewerSub">—</div></div>
+        <div class="app-progress"><span class="count" id="confirmedCount">0</span> / <span id="totalCount">0</span> confirmed</div>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+    </div>
+    <div id="updateBannerSlot"></div>
+
+    <!-- Menu Structure panel — closed by default. This is the exception-path
+         editor: the pipeline already fetches and builds the tree correctly
+         most of the time, so this stays out of the way until someone
+         actually needs to fix a glitch or build out a new restaurant. -->
+    <div class="structure-panel-wrap">
+      <button class="structure-panel-toggle" onclick="toggleStructurePanel()" id="structurePanelToggle">
+        <span class="structure-panel-chevron" id="structurePanelChevron">▸</span>
+        Menu Structure
+        <span class="structure-panel-hint">— fix the category tree here</span>
+      </button>
+      <div class="structure-panel-body" id="structurePanelBody" style="display:none;"></div>
+    </div>
+
+    <div class="scroll" id="scroll"></div>
+  </div>
+
+  <div class="footer-note">Dummy data for frontend build reference — not connected to a live pipeline.</div>
+  <div class="saved-toast" id="savedToast">Saved</div>
+
+<script>
+// ============================================================
+// DUMMY DATA
+// Two-state model per this revision: a value/entry/section is either
+// "attn" (needs a person's attention — red) or "ok" (confirmed — green).
+// No separate amber tier. Allergen conflicts are now just an entry with
+// attn:true sitting in the normal entries array — never a different
+// control type from a clean allergen list.
+// ============================================================
+const RESTAURANTS = {
+  mcdonalds: {
+    name: "McDonald's", logo: "🍔", establishmentType: "fast_food",
+    lastUpdated: "2 hours ago", hasAutoUpdate: true,
+    updateNote: "Auto-reviewer detected a price and menu change on mcdonalds.com since this brand was last reviewed.",
+    menu: [
+      { name: "Burgers", items: [
+        { name: "Hamburger", cal: "250 cal", fields: {
+          image: { ok: true },
+          macros: { ok: true, values: [{l:"Calories",v:250,u:"kcal",ok:true},{l:"Protein",v:12,u:"g",ok:true},{l:"Carbs",v:31,u:"g",ok:true},{l:"Fat",v:9,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:480,u:"mg",ok:true},{l:"Fiber",v:1,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [{v:"Gluten",ok:true},{v:"Soy",ok:true}] },
+          quantity: { ok: true, value: "100g" }, price: { ok: true, value: "$1.79" },
+          ingredients: { ok: true, entries: [{v:"Beef",ok:true},{v:"bun",ok:true},{v:"onion",ok:true},{v:"pickle",ok:true},{v:"mustard",ok:true},{v:"ketchup",ok:true}] }
+        }},
+        { name: "Cheeseburger", cal: "300 cal", fields: {
+          image: { ok: true },
+          macros: { ok: true, values: [{l:"Calories",v:300,u:"kcal",ok:true},{l:"Protein",v:15,u:"g",ok:true},{l:"Carbs",v:32,u:"g",ok:true},{l:"Fat",v:13,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:680,u:"mg",ok:true},{l:"Fiber",v:1,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [{v:"Gluten",ok:true},{v:"Dairy",ok:true},{v:"Soy",ok:true}] },
+          quantity: { ok: true, value: "116g" }, price: { ok: true, value: "$1.99" },
+          ingredients: { ok: true, entries: [{v:"Beef",ok:true},{v:"bun",ok:true},{v:"cheese",ok:true},{v:"onion",ok:true},{v:"pickle",ok:true},{v:"mustard",ok:true},{v:"ketchup",ok:true}] }
+        }},
+        { name: "Big Mac", cal: "550 cal", fields: {
+          image: { ok: true },
+          macros: { ok: true, values: [{l:"Calories",v:550,u:"kcal",ok:true},{l:"Protein",v:25,u:"g",ok:true},{l:"Carbs",v:45,u:"g",ok:true},{l:"Fat",v:30,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:1010,u:"mg",ok:true},{l:"Fiber",v:3,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [{v:"Gluten",ok:true},{v:"Dairy",ok:true}] },
+          quantity: { ok: true, value: "219g" }, price: { ok: true, value: "$5.99" },
+          ingredients: { ok: true, entries: [{v:"Beef",ok:true},{v:"sesame seed bun",ok:true},{v:"lettuce",ok:true},{v:"cheese",ok:true},{v:"pickles",ok:true},{v:"onion",ok:true},{v:"special sauce",ok:true}] }
+        }},
+        { name: "Double Cheeseburger", cal: "440 cal", fields: {
+          image: { ok: false, reason: "No match found — placeholder shown, in fetch queue" },
+          macros: { ok: false, reason: "Reported 440 cal — macros calculate to 512 cal", values: [{l:"Calories",v:512,u:"kcal",ok:false},{l:"Protein",v:25,u:"g",ok:true},{l:"Carbs",v:22,u:"g",ok:true},{l:"Fat",v:30,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:920,u:"mg",ok:true},{l:"Fiber",v:2,u:"g",ok:true}] },
+          allergens: { ok: false, reason: 'Ingredients list "whey" — Dairy may be missing from this list', entries: [{v:"Gluten",ok:true},{v:"Dairy",ok:false}] },
+          quantity: { ok: true, value: "227g" }, price: { ok: true, value: "$6.49" },
+          ingredients: { ok: false, reason: "Not found on source — add manually if known", entries: [] }
+        }},
+        { name: "Quarter Pounder with Cheese", cal: "520 cal", fields: {
+          image: { ok: true },
+          macros: { ok: true, values: [{l:"Calories",v:520,u:"kcal",ok:true},{l:"Protein",v:30,u:"g",ok:true},{l:"Carbs",v:42,u:"g",ok:true},{l:"Fat",v:26,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:1100,u:"mg",ok:true},{l:"Fiber",v:2,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [{v:"Gluten",ok:true},{v:"Dairy",ok:true}] },
+          quantity: { ok: true, value: "226g" }, price: { ok: true, value: "$6.29" },
+          ingredients: { ok: true, entries: [{v:"Beef",ok:true},{v:"sesame seed bun",ok:true},{v:"cheese",ok:true},{v:"onion",ok:true},{v:"pickle",ok:true},{v:"mustard",ok:true},{v:"ketchup",ok:true}] }
+        }},
+        { name: "Spicy McCrispy", cal: "700 cal", fields: {
+          image: { ok: false, reason: "No match found" },
+          macros: { ok: false, reason: "Reported 700 cal — calculates to 810 cal", values: [{l:"Calories",v:810,u:"kcal",ok:false},{l:"Protein",v:28,u:"g",ok:false},{l:"Carbs",v:58,u:"g",ok:false},{l:"Fat",v:38,u:"g",ok:false}] },
+          micros: { ok: false, reason: "Fiber + sugar exceeds total carbs", values: [{l:"Sodium",v:1470,u:"mg",ok:false},{l:"Fiber",v:2,u:"g",ok:false},{l:"Sugar",v:4,u:"g",ok:false}] },
+          allergens: { ok: false, reason: 'Ingredients list "wheat" — Gluten may be missing from this list', entries: [{v:"Gluten",ok:false}] },
+          quantity: { ok: false, reason: "Serving size missing from source", value: "" },
+          price: { ok: false, reason: "Not listed on source page", value: "" },
+          ingredients: { ok: false, reason: "Not found — add manually if known", entries: [] }
+        }},
+      ]},
+      { name: "Chicken & Sandwiches", items: [
+        { name: "McChicken", cal: "400 cal", fields: {
+          image: { ok: true },
+          macros: { ok: true, values: [{l:"Calories",v:400,u:"kcal",ok:true},{l:"Protein",v:14,u:"g",ok:true},{l:"Carbs",v:40,u:"g",ok:true},{l:"Fat",v:21,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:700,u:"mg",ok:true},{l:"Fiber",v:2,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [{v:"Gluten",ok:true},{v:"Eggs",ok:true}] },
+          quantity: { ok: true, value: "143g" }, price: { ok: true, value: "$2.29" },
+          ingredients: { ok: true, entries: [{v:"Chicken patty",ok:true},{v:"bun",ok:true},{v:"mayonnaise",ok:true},{v:"lettuce",ok:true}] }
+        }},
+        { name: "Filet-O-Fish", cal: "390 cal", fields: {
+          image: { ok: false, reason: "No match found — placeholder shown, in fetch queue" },
+          macros: { ok: true, values: [{l:"Calories",v:390,u:"kcal",ok:true},{l:"Protein",v:16,u:"g",ok:true},{l:"Carbs",v:39,u:"g",ok:true},{l:"Fat",v:19,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:590,u:"mg",ok:true},{l:"Fiber",v:1,u:"g",ok:true}] },
+          allergens: { ok: false, reason: 'Ingredients list "fish" — Fish may be missing from this list', entries: [{v:"Fish",ok:false}] },
+          quantity: { ok: true, value: "142g" }, price: { ok: true, value: "$4.99" },
+          ingredients: { ok: true, entries: [{v:"Fish",ok:true},{v:"bun",ok:true},{v:"cheese",ok:true},{v:"tartar sauce",ok:true}] }
+        }},
+      ]},
+      { name: "Sides", items: [
+        { name: "World Famous Fries (Medium)", cal: "320 cal", fields: {
+          image: { ok: true },
+          macros: { ok: true, values: [{l:"Calories",v:320,u:"kcal",ok:true},{l:"Protein",v:4,u:"g",ok:true},{l:"Carbs",v:43,u:"g",ok:true},{l:"Fat",v:15,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:260,u:"mg",ok:true},{l:"Fiber",v:4,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [] },
+          quantity: { ok: true, value: "111g" }, price: { ok: true, value: "$2.79" },
+          ingredients: { ok: true, entries: [{v:"Potatoes",ok:true},{v:"vegetable oil",ok:true},{v:"salt",ok:true}] }
+        }},
+        { name: "Apple Slices", cal: "15 cal", fields: {
+          image: { ok: true },
+          macros: { ok: false, reason: "Small item — 15 cal reported, tighter tolerance band applies, off by 4 cal", values: [{l:"Calories",v:19,u:"kcal",ok:false},{l:"Protein",v:0,u:"g",ok:true},{l:"Carbs",v:5,u:"g",ok:true},{l:"Fat",v:0,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:0,u:"mg",ok:true},{l:"Fiber",v:1,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [] },
+          quantity: { ok: true, value: "34g" }, price: { ok: true, value: "$1.19" },
+          ingredients: { ok: true, entries: [{v:"Apples",ok:true}] }
+        }},
+      ]},
+      { name: "Beverages", children: [
+        { name: "Hot Beverages", items: [
+          { name: "Premium Roast Coffee (Small)", cal: "0 cal", fields: {
+            image: { ok: true },
+            macros: { ok: true, values: [{l:"Calories",v:0,u:"kcal",ok:true},{l:"Protein",v:0,u:"g",ok:true},{l:"Carbs",v:0,u:"g",ok:true},{l:"Fat",v:0,u:"g",ok:true}] },
+            micros: { ok: true, values: [{l:"Sodium",v:5,u:"mg",ok:true}] },
+            allergens: { ok: true, entries: [] },
+            quantity: { ok: true, value: "355ml" }, price: { ok: true, value: "$1.09" },
+            ingredients: { ok: true, entries: [{v:"Coffee",ok:true}] }
+          }},
+        ]},
+        { name: "Cold Beverages", items: [
+          { name: "Chocolate Shake (Medium)", cal: "580 cal", fields: {
+            image: { ok: false, reason: "No match found" },
+            macros: { ok: false, reason: "Reported 580 cal — calculates to 690 cal", values: [{l:"Calories",v:690,u:"kcal",ok:false},{l:"Protein",v:13,u:"g",ok:false},{l:"Carbs",v:95,u:"g",ok:false},{l:"Fat",v:19,u:"g",ok:false}] },
+            micros: { ok: false, reason: "Sugar value exceeds total carbs reported", values: [{l:"Sodium",v:240,u:"mg",ok:false},{l:"Fiber",v:0,u:"g",ok:false},{l:"Sugar",v:95,u:"g",ok:false}] },
+            allergens: { ok: false, reason: 'Ingredients list "milk" — Dairy may be missing from this list', entries: [{v:"Dairy",ok:false}] },
+            quantity: { ok: false, reason: "Serving size missing from source", value: "" },
+            price: { ok: true, value: "$3.99" },
+            ingredients: { ok: false, reason: "Not found — add manually if known", entries: [] }
+          }},
+        ]},
+      ]},
+    ]
+  },
+
+  starbucks: {
+    name: "Starbucks", logo: "☕", establishmentType: "cafe",
+    lastUpdated: "Yesterday", hasAutoUpdate: false,
+    menu: [
+      { name: "Drinks", children: [
+        { name: "Hot Beverages", items: [
+          { name: "Caffè Latte", cal: "190 cal", fields: {
+            image: { ok: true },
+            macros: { ok: true, values: [{l:"Calories",v:190,u:"kcal",ok:true},{l:"Protein",v:10,u:"g",ok:true},{l:"Carbs",v:18,u:"g",ok:true},{l:"Fat",v:7,u:"g",ok:true}] },
+            micros: { ok: true, values: [{l:"Sodium",v:150,u:"mg",ok:true},{l:"Sugar",v:17,u:"g",ok:true}] },
+            allergens: { ok: true, entries: [{v:"Dairy",ok:true}] },
+            quantity: { ok: true, value: "473ml" }, price: { ok: true, value: "$4.65" },
+            ingredients: { ok: true, entries: [{v:"Espresso",ok:true},{v:"steamed milk",ok:true}] }
+          }},
+          { name: "Caramel Macchiato", cal: "250 cal", fields: {
+            image: { ok: true },
+            macros: { ok: true, values: [{l:"Calories",v:250,u:"kcal",ok:true},{l:"Protein",v:10,u:"g",ok:true},{l:"Carbs",v:35,u:"g",ok:true},{l:"Fat",v:7,u:"g",ok:true}] },
+            micros: { ok: true, values: [{l:"Sodium",v:150,u:"mg",ok:true},{l:"Sugar",v:33,u:"g",ok:true}] },
+            allergens: { ok: true, entries: [{v:"Dairy",ok:true}] },
+            quantity: { ok: true, value: "473ml" }, price: { ok: true, value: "$5.25" },
+            ingredients: { ok: true, entries: [{v:"Espresso",ok:true},{v:"steamed milk",ok:true},{v:"vanilla syrup",ok:true},{v:"caramel drizzle",ok:true}] }
+          }},
+          { name: "Cappuccino", cal: "120 cal", fields: {
+            image: { ok: false, reason: "No match found — placeholder shown, in fetch queue" },
+            macros: { ok: true, values: [{l:"Calories",v:120,u:"kcal",ok:true},{l:"Protein",v:8,u:"g",ok:true},{l:"Carbs",v:12,u:"g",ok:true},{l:"Fat",v:4,u:"g",ok:true}] },
+            micros: { ok: true, values: [{l:"Sodium",v:100,u:"mg",ok:true}] },
+            allergens: { ok: true, entries: [{v:"Dairy",ok:true}] },
+            quantity: { ok: true, value: "355ml" }, price: { ok: true, value: "$4.45" },
+            ingredients: { ok: true, entries: [{v:"Espresso",ok:true},{v:"steamed milk",ok:true},{v:"milk foam",ok:true}] }
+          }},
+        ]},
+        { name: "Cold Beverages", items: [
+          { name: "Iced Brown Sugar Oatmilk Shaken Espresso", cal: "190 cal", fields: {
+            image: { ok: true },
+            macros: { ok: true, values: [{l:"Calories",v:190,u:"kcal",ok:true},{l:"Protein",v:3,u:"g",ok:true},{l:"Carbs",v:28,u:"g",ok:true},{l:"Fat",v:6,u:"g",ok:true}] },
+            micros: { ok: true, values: [{l:"Sodium",v:65,u:"mg",ok:true},{l:"Fiber",v:1,u:"g",ok:true}] },
+            allergens: { ok: true, entries: [] },
+            quantity: { ok: true, value: "473ml" }, price: { ok: true, value: "$5.75" },
+            ingredients: { ok: true, entries: [{v:"Espresso",ok:true},{v:"oatmilk",ok:true},{v:"brown sugar syrup",ok:true}] }
+          }},
+          { name: "Pink Drink", cal: "140 cal", fields: {
+            image: { ok: true },
+            macros: { ok: false, reason: "Reported 140 cal — calculates to 165 cal", values: [{l:"Calories",v:165,u:"kcal",ok:false},{l:"Protein",v:0,u:"g",ok:true},{l:"Carbs",v:41,u:"g",ok:true},{l:"Fat",v:0,u:"g",ok:true}] },
+            micros: { ok: true, values: [{l:"Sodium",v:10,u:"mg",ok:true},{l:"Sugar",v:32,u:"g",ok:true}] },
+            allergens: { ok: true, entries: [] },
+            quantity: { ok: true, value: "473ml" }, price: { ok: true, value: "$5.45" },
+            ingredients: { ok: true, entries: [{v:"Coconutmilk",ok:true},{v:"strawberry acai base",ok:true},{v:"freeze-dried strawberries",ok:true}] }
+          }},
+        ]},
+        { name: "Refreshers", items: [
+          { name: "Strawberry Açaí Refresher", cal: "90 cal", fields: {
+            image: { ok: true },
+            macros: { ok: true, values: [{l:"Calories",v:90,u:"kcal",ok:true},{l:"Protein",v:0,u:"g",ok:true},{l:"Carbs",v:22,u:"g",ok:true},{l:"Fat",v:0,u:"g",ok:true}] },
+            micros: { ok: true, values: [{l:"Sodium",v:5,u:"mg",ok:true}] },
+            allergens: { ok: true, entries: [] },
+            quantity: { ok: true, value: "473ml" }, price: { ok: true, value: "$4.95" },
+            ingredients: { ok: true, entries: [{v:"Water",ok:true},{v:"strawberry flavors",ok:true},{v:"green coffee extract",ok:true}] }
+          }},
+        ]},
+      ]},
+      { name: "Food", children: [
+        { name: "Bakery", items: [
+          { name: "Butter Croissant", cal: "260 cal", fields: {
+            image: { ok: true },
+            macros: { ok: true, values: [{l:"Calories",v:260,u:"kcal",ok:true},{l:"Protein",v:5,u:"g",ok:true},{l:"Carbs",v:27,u:"g",ok:true},{l:"Fat",v:14,u:"g",ok:true}] },
+            micros: { ok: true, values: [{l:"Sodium",v:300,u:"mg",ok:true},{l:"Fiber",v:1,u:"g",ok:true}] },
+            allergens: { ok: true, entries: [{v:"Gluten",ok:true},{v:"Dairy",ok:true},{v:"Eggs",ok:true}] },
+            quantity: { ok: true, value: "67g" }, price: { ok: true, value: "$3.75" },
+            ingredients: { ok: true, entries: [{v:"Flour",ok:true},{v:"butter",ok:true},{v:"yeast",ok:true},{v:"sugar",ok:true}] }
+          }},
+        ]},
+        { name: "Hot Breakfast", items: [
+          { name: "Bacon, Gouda & Egg Sandwich", cal: "360 cal", fields: {
+            image: { ok: false, reason: "No match found" },
+            macros: { ok: false, reason: "Reported 360 cal — calculates to 420 cal", values: [{l:"Calories",v:420,u:"kcal",ok:false},{l:"Protein",v:19,u:"g",ok:false},{l:"Carbs",v:31,u:"g",ok:false},{l:"Fat",v:22,u:"g",ok:false}] },
+            micros: { ok: false, reason: "Sodium value implausibly low for item type", values: [{l:"Sodium",v:980,u:"mg",ok:false},{l:"Cholest.",v:165,u:"mg",ok:false}] },
+            allergens: { ok: false, reason: 'Ingredients list "egg" — Eggs may be missing from this list', entries: [{v:"Eggs",ok:false}] },
+            quantity: { ok: true, value: "138g" }, price: { ok: true, value: "$4.75" },
+            ingredients: { ok: false, reason: "Not found — add manually if known", entries: [] }
+          }},
+        ]},
+      ]},
+    ]
+  },
+
+  chipotle: {
+    name: "Chipotle", logo: "🌯", establishmentType: "fast_casual",
+    lastUpdated: "5 days ago", hasAutoUpdate: false,
+    menu: [
+      { name: "Entrees", items: [
+        { name: "Burrito Bowl", cal: "630 cal", fields: {
+          image: { ok: true },
+          macros: { ok: true, values: [{l:"Calories",v:630,u:"kcal",ok:true},{l:"Protein",v:41,u:"g",ok:true},{l:"Carbs",v:54,u:"g",ok:true},{l:"Fat",v:24,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:1420,u:"mg",ok:true},{l:"Fiber",v:11,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [{v:"Dairy",ok:true}] },
+          quantity: { ok: true, value: "455g" }, price: { ok: true, value: "$9.80" },
+          ingredients: { ok: true, entries: [{v:"Brown rice",ok:true},{v:"black beans",ok:true},{v:"steak",ok:true},{v:"fajita veggies",ok:true},{v:"cheese",ok:true},{v:"romaine",ok:true}] }
+        }},
+        { name: "Chicken Burrito", cal: "1050 cal", fields: {
+          image: { ok: true },
+          macros: { ok: false, reason: "Large item — reported 1050 cal, calculates to 1140 cal", values: [{l:"Calories",v:1140,u:"kcal",ok:false},{l:"Protein",v:58,u:"g",ok:true},{l:"Carbs",v:110,u:"g",ok:true},{l:"Fat",v:42,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:2140,u:"mg",ok:true},{l:"Fiber",v:13,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [{v:"Gluten",ok:true},{v:"Dairy",ok:true}] },
+          quantity: { ok: true, value: "540g" }, price: { ok: true, value: "$9.75" },
+          ingredients: { ok: true, entries: [{v:"Flour tortilla",ok:true},{v:"white rice",ok:true},{v:"pinto beans",ok:true},{v:"chicken",ok:true},{v:"cheese",ok:true},{v:"sour cream",ok:true}] }
+        }},
+        { name: "Salad", cal: "220 cal", fields: {
+          image: { ok: true },
+          macros: { ok: true, values: [{l:"Calories",v:220,u:"kcal",ok:true},{l:"Protein",v:15,u:"g",ok:true},{l:"Carbs",v:12,u:"g",ok:true},{l:"Fat",v:12,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:680,u:"mg",ok:true},{l:"Fiber",v:5,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [] },
+          quantity: { ok: true, value: "310g" }, price: { ok: true, value: "$8.95" },
+          ingredients: { ok: true, entries: [{v:"Romaine",ok:true},{v:"chicken",ok:true},{v:"fajita veggies",ok:true},{v:"salsa",ok:true}] }
+        }},
+      ]},
+      { name: "Sides & Drinks", items: [
+        { name: "Chips & Guacamole", cal: "770 cal", fields: {
+          image: { ok: true },
+          macros: { ok: true, values: [{l:"Calories",v:770,u:"kcal",ok:true},{l:"Protein",v:9,u:"g",ok:true},{l:"Carbs",v:73,u:"g",ok:true},{l:"Fat",v:49,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:690,u:"mg",ok:true},{l:"Fiber",v:11,u:"g",ok:true}] },
+          allergens: { ok: true, entries: [] },
+          quantity: { ok: true, value: "195g" }, price: { ok: true, value: "$4.55" },
+          ingredients: { ok: true, entries: [{v:"Corn tortilla chips",ok:true},{v:"avocado",ok:true},{v:"lime",ok:true},{v:"cilantro",ok:true}] }
+        }},
+        { name: "Fountain Drink (Large)", cal: "0 cal", fields: {
+          image: { ok: false, reason: "No match found — placeholder shown, in fetch queue" },
+          macros: { ok: true, values: [{l:"Calories",v:0,u:"kcal",ok:true},{l:"Protein",v:0,u:"g",ok:true},{l:"Carbs",v:0,u:"g",ok:true},{l:"Fat",v:0,u:"g",ok:true}] },
+          micros: { ok: true, values: [{l:"Sodium",v:15,u:"mg",ok:true}] },
+          allergens: { ok: true, entries: [] },
+          quantity: { ok: true, value: "710ml" }, price: { ok: true, value: "$2.95" },
+          ingredients: { ok: true, entries: [{v:"Varies by selection",ok:true}] }
+        }},
+      ]},
+    ]
+  },
+};
+
+const TYPE_LABELS = { fast_food: "Fast Food", fast_casual: "Fast Casual", cafe: "Cafe", fine_dining: "Fine Dining", bakery: "Bakery", bar: "Bar", other: "Other" };
+const LOGO_OPTIONS = ["🍔","☕","🌯","🍕","🍜","🥗","🍩","🍗","🍰","🏬"];
+
+let currentRestaurantKey = null;
+let itemCounter = 0;
+let activeTypeFilter = "all";
+let expandedSections = new Set();
+let pinnedItems = new Set(); // item ids exempted from auto-collapse
+let itemIdMap = new Map();
+// Tracks which inline "add" form is currently open, so it survives the
+// re-render that happens right after the "+ Add" button is tapped.
+let addingCategory = false;
+let addingItemFor = null; // path-key string ("0-2-1") | null — depth-agnostic now
+let addingSubcategoryFor = null; // path-key string | null — depth-agnostic now
+let addingValueFor = null; // "itemId:sectionKey" | null — macro/micro column being added
+let addingEntryFor = null; // "itemId:sectionKey" | null — allergen/ingredient being added
+
+// Shared inline-add form markup, used everywhere a native prompt() used to
+// be: new category, new item, new value column, new allergen/ingredient
+// entry. Enter confirms, Escape cancels — same as the rest of the tool.
+function inlineAddForm(inputId, onConfirm, onCancel, placeholder) {
+  return `<div class="inline-add-form">
+    <input type="text" id="${inputId}" placeholder="${placeholder}"
+      onclick="event.stopPropagation()"
+      onkeydown="event.stopPropagation(); if(event.key==='Enter'){${onConfirm}} if(event.key==='Escape'){${onCancel}}">
+    <button class="inline-add-confirm" onclick="event.stopPropagation(); ${onConfirm}">✓</button>
+    <button class="inline-add-cancel" onclick="event.stopPropagation(); ${onCancel}">×</button>
+  </div>`;
+}
+
+// ============================================================
+// SCREEN SWITCHING
+// ============================================================
+function showScreen(id) { document.querySelectorAll(".screen").forEach(s => s.classList.remove("active")); document.getElementById(id).classList.add("active"); }
+function goToAdmin() { currentRestaurantKey = null; renderAdmin(); showScreen("screen-admin"); }
+function openRestaurant(key) { currentRestaurantKey = key; structurePanelOpen = false; renderReviewer(); showScreen("screen-reviewer"); window.scrollTo(0, 0); }
+function startAddRestaurant() {
+  document.getElementById("addRestaurantSlot").innerHTML = inlineAddForm("newRestaurantInput", "confirmAddRestaurant()", "cancelAddRestaurant()", "Restaurant name…");
+  document.getElementById("newRestaurantInput").focus();
+}
+function cancelAddRestaurant() {
+  document.getElementById("addRestaurantSlot").innerHTML = `<button class="add-restaurant-btn" onclick="startAddRestaurant()">+ Add restaurant</button>`;
+}
+function confirmAddRestaurant() {
+  const input = document.getElementById("newRestaurantInput");
+  const name = input.value.trim();
+  if (!name) return;
+  const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  RESTAURANTS[key] = { name, logo: "🏬", establishmentType: "other", lastUpdated: "Just now", hasAutoUpdate: false, menu: [] };
+  renderAdmin();
+}
+function setTypeFilter(type) { activeTypeFilter = type; renderAdmin(); }
+
+// ============================================================
+// SCREEN 1 — ADMIN PANEL, now with restaurant-level editing
+// ============================================================
+// Recursively visits every item anywhere in the tree, at any depth. This
+// single walker is what makes "arbitrary nesting" actually work — every
+// place that used to special-case "category" vs "subcategory" now just
+// calls this instead, so a third or fourth level of nesting needs no new
+// code anywhere else.
+function walkItems(nodes, callback) {
+  nodes.forEach(node => {
+    if (node.items) node.items.forEach(item => callback(item));
+    if (node.children) walkItems(node.children, callback);
+  });
+}
+
+function countItemsAndConfirmed(menu) {
+  let total = 0, confirmed = 0;
+  walkItems(menu, item => {
+    total++;
+    // Confirmed means "a human looked at this and ticked it" — never
+    // auto-set true just because the data happens to be clean. A person
+    // still has to open the item and check the box themselves, even for
+    // an item with zero flagged fields.
+    if (item.confirmed === undefined) item.confirmed = false;
+    if (item.confirmed) confirmed++;
+  });
+  return { total, confirmed };
+}
+
+function allFieldsOk(item) {
+  return Object.values(item.fields).every(f => f.ok !== false);
+}
+
+function renderTypeFilters() {
+  const typesPresent = [...new Set(Object.values(RESTAURANTS).map(r => r.establishmentType))];
+  let html = `<button class="type-filter-chip ${activeTypeFilter === "all" ? "active" : ""}" onclick="setTypeFilter('all')">All</button>`;
+  typesPresent.forEach(t => { html += `<button class="type-filter-chip ${activeTypeFilter === t ? "active" : ""}" onclick="setTypeFilter('${t}')">${TYPE_LABELS[t] || t}</button>`; });
+  document.getElementById("typeFilters").innerHTML = html;
+}
+
+// Restaurant logo — a real "Upload" popover, same interaction language as
+// item-level image upload, not a click-to-cycle shortcut. Dummy-data stand-in:
+// accepts a pasted image URL where a real build would open a file picker.
+function openLogoUpload(key, anchorEl) {
+  event.stopPropagation();
+  closeAnyPopover();
+  const wrap = anchorEl.closest(".restaurant-logo-wrap");
+  const pop = document.createElement("div");
+  pop.className = "logo-upload-popover";
+  pop.id = "logoUploadPopover";
+  pop.innerHTML = `
+    <div class="popover-label">Upload restaurant image</div>
+    <input type="text" id="logoUrlInput" placeholder="Paste an image URL…">
+    <div class="popover-actions">
+      <button class="popover-btn" onclick="event.stopPropagation(); closeAnyPopover()">Cancel</button>
+      <button class="popover-btn primary" onclick="event.stopPropagation(); saveLogoUpload('${key}')">Upload</button>
+    </div>`;
+  wrap.appendChild(pop);
+  document.getElementById("logoUrlInput").focus();
+  setTimeout(() => document.addEventListener("click", closeAnyPopoverOnce, { once: true }), 0);
+}
+function saveLogoUpload(key) {
+  const url = document.getElementById("logoUrlInput").value.trim();
+  if (url) RESTAURANTS[key].logoImg = url;
+  closeAnyPopover();
+  // Refresh whichever screen the person is actually looking at — this can
+  // be called from the admin list or from inside the reviewer header now.
+  if (currentRestaurantKey === key) renderReviewerHeader(); else renderAdmin();
+}
+function closeAnyPopover() {
+  const p = document.getElementById("logoUploadPopover"); if (p) p.remove();
+  const t = document.getElementById("typePickerPopover"); if (t) t.remove();
+}
+function closeAnyPopoverOnce(e) {
+  // don't close if the click was inside a popover itself (e.g. the text input)
+  if (e.target.closest(".logo-upload-popover, .type-picker")) {
+    setTimeout(() => document.addEventListener("click", closeAnyPopoverOnce, { once: true }), 0);
+    return;
+  }
+  closeAnyPopover();
+}
+
+function openTypePicker(key) {
+  event.stopPropagation();
+  closeAnyPopover();
+  const badge = document.getElementById(`badge-${key}`);
+  const rect = badge.getBoundingClientRect();
+  const popover = document.createElement("div");
+  popover.className = "type-picker open";
+  popover.id = "typePickerPopover";
+  popover.style.left = rect.left + "px";
+  popover.style.top = (rect.bottom + window.scrollY) + "px";
+  const fixedOptions = Object.keys(TYPE_LABELS).filter(t => t !== "other").map(t =>
+    `<button class="type-picker-option" onclick="event.stopPropagation(); setRestaurantType('${key}','${t}')">${TYPE_LABELS[t]}</button>`
+  ).join("");
+  // "Other" doesn't apply immediately — it reveals a text field right in
+  // the popover, same inline-input pattern as everywhere else in this
+  // tool, so a person can say what "other" actually means.
+  popover.innerHTML = fixedOptions + `
+    <div class="type-picker-other">
+      <button class="type-picker-option" onclick="event.stopPropagation(); showOtherTypeInput('${key}')">Other…</button>
+      <div class="type-picker-other-form" id="otherTypeForm" style="display:none;">
+        <input type="text" id="otherTypeInput" placeholder="Describe the type…" onclick="event.stopPropagation()"
+          onkeydown="event.stopPropagation(); if(event.key==='Enter'){setOtherRestaurantType('${key}')}">
+        <button class="inline-add-confirm" onclick="event.stopPropagation(); setOtherRestaurantType('${key}')">✓</button>
+      </div>
+    </div>`;
+  document.body.appendChild(popover);
+  setTimeout(() => document.addEventListener("click", closeAnyPopoverOnce, { once: true }), 0);
+}
+function showOtherTypeInput(key) {
+  document.getElementById("otherTypeForm").style.display = "flex";
+  document.getElementById("otherTypeInput").focus();
+}
+function setOtherRestaurantType(key) {
+  const input = document.getElementById("otherTypeInput");
+  const label = input.value.trim();
+  if (!label) return;
+  RESTAURANTS[key].establishmentType = "other";
+  RESTAURANTS[key].customTypeLabel = label;
+  closeAnyPopover();
+  renderAdmin();
+}
+function setRestaurantType(key, type) {
+  RESTAURANTS[key].establishmentType = type;
+  delete RESTAURANTS[key].customTypeLabel;
+  closeAnyPopover();
+  renderAdmin();
+}
+
+function renderAdmin() {
+  renderTypeFilters();
+  let html = "";
+  Object.keys(RESTAURANTS).forEach(key => {
+    const r = RESTAURANTS[key];
+    if (activeTypeFilter !== "all" && r.establishmentType !== activeTypeFilter) return;
+    const { total, confirmed } = countItemsAndConfirmed(r.menu);
+    const pct = total > 0 ? Math.round((confirmed / total) * 100) : 0;
+    const pctClass = pct === 100 ? "done" : "partial";
+    const typeLabel = r.establishmentType === "other" && r.customTypeLabel ? r.customTypeLabel : (TYPE_LABELS[r.establishmentType] || "Other");
+    const updateHtml = r.hasAutoUpdate ? `<span class="update-pill">Update found</span>` : "";
+    const logoContent = r.logoImg ? `<img src="${r.logoImg}" alt="">` : r.logo;
+    html += `<div class="restaurant-card" id="card-${key}">
+      <div class="restaurant-logo-wrap">
+        <div class="restaurant-logo" onclick="openLogoUpload('${key}', this)" title="Tap to upload an image">${logoContent}</div>
+        <div class="restaurant-logo-edit-hint">✎</div>
+      </div>
+      <div class="restaurant-info" onclick="openRestaurant('${key}')">
+        <div class="restaurant-name-row">
+          <span class="restaurant-name">${r.name}</span>
+          <button class="type-badge ${r.establishmentType}" id="badge-${key}" onclick="openTypePicker('${key}')">${typeLabel}</button>
+          ${updateHtml}
+        </div>
+        <div class="restaurant-meta">${total} items · updated ${r.lastUpdated}</div>
+      </div>
+      <div class="restaurant-progress-wrap" onclick="openRestaurant('${key}')">
+        <div class="restaurant-progress-pct ${pctClass}">${confirmed}/${total}</div>
+        <div class="restaurant-progress-bar"><div class="restaurant-progress-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="restaurant-chevron" onclick="openRestaurant('${key}')">›</div>
+    </div>`;
+  });
+  document.getElementById("restaurantList").innerHTML = html || `<div style="padding:30px 6px; color:var(--ink-faint); font-size:14px;">No restaurants match this filter.</div>`;
+}
+
+// ============================================================
+// SCREEN 2 — REVIEWER
+// ============================================================
+// Walks the tree and returns every selectable location as a flat list, each
+// tagged with its depth and a full breadcrumb path — e.g. a node four
+// levels deep produces "Burgers → Ginger → Ginger 65". Optgroups can't
+// nest in real HTML, so past two levels this switches to indentation by
+// depth instead — the only rendering approach that scales to arbitrary
+// nesting rather than capping out at whatever level of grouping HTML allows.
+function categoryStructure() {
+  const r = RESTAURANTS[currentRestaurantKey];
+  const options = [];
+  function walk(nodes, breadcrumb, path, depth) {
+    nodes.forEach((node, i) => {
+      const fullLabel = breadcrumb.length ? `${breadcrumb.join(" → ")} → ${node.name}` : node.name;
+      const nodePath = [...path, i];
+      if (node.items) options.push({ label: node.name, value: fullLabel, pathKey: pathKey(nodePath), depth, hasItems: true });
+      if (node.children) walk(node.children, [...breadcrumb, node.name], nodePath, depth + 1);
+    });
+  }
+  walk(r.menu, [], [], 0);
+  return options;
+}
+function allCategoryNames() { return categoryStructure().map(o => o.value); }
+function moveOptionsHtml(currentPathKey) {
+  return categoryStructure().map(o => {
+    // Depth shown as indentation, not nested optgroups — this is what lets
+    // a fourth or fifth level render correctly instead of hitting a wall
+    // at two levels of native HTML grouping. The option's VALUE is the
+    // node's real path key (so selecting it can actually move the item);
+    // the breadcrumb is only ever the visible label text.
+    const indent = "&nbsp;&nbsp;&nbsp;".repeat(o.depth);
+    return `<option value="${o.pathKey}" ${o.pathKey === currentPathKey ? "selected" : ""}>${indent}${o.depth > 0 ? "› " : ""}${o.label}</option>`;
+  }).join("");
+}
+
+function summarizeValues(values) { return values.map(c => `${c.v}${c.u === "kcal" ? " cal" : c.u}`).join(" · "); }
+
+// A single numeric cell. Each cell that is NOT ok gets its own confirm-check
+// beside it — clicking it marks just that one value confirmed (green),
+// closing the loop without requiring the whole section be redone.
+function valueCell(cellData, sectionKey, itemId, idx) {
+  const needsAttn = cellData.ok === false;
+  const checkHtml = needsAttn
+    ? `<button class="confirm-check" onclick="event.stopPropagation(); confirmCell('${itemId}','${sectionKey}',${idx})" title="Mark confirmed">✓</button>`
+    : "";
+  return `<div class="value-cell">
+    <span class="value-cell-label">${cellData.l}</span>
+    <div style="display:flex; align-items:center; gap:5px;">
+      <div class="value-cell-input-wrap ${needsAttn ? "attn-pending" : ""}">
+        <input type="number" class="value-cell-input" value="${cellData.v}" onclick="event.stopPropagation()" onchange="editCellValue('${itemId}','${sectionKey}',${idx},this)">
+        <span class="value-cell-unit">${cellData.u}</span>
+      </div>
+      ${checkHtml}
+    </div>
+  </div>`;
+}
+function addValueCell(sectionKey, itemId) {
+  const key = `${itemId}:${sectionKey}`;
+  if (addingValueFor === key) {
+    return `<div class="value-cell add-cell" style="min-width:190px;">
+      <span class="value-cell-label">&nbsp;</span>
+      <div class="inline-add-form">
+        <input type="text" id="newValueLabel" placeholder="Label" style="width:70px; height:29px; font-size:12px; border:1px solid var(--accent); border-radius:6px; padding:0 6px;" onclick="event.stopPropagation()">
+        <input type="text" id="newValueUnit" placeholder="unit" style="width:44px; height:29px; font-size:12px; border:1px solid var(--accent); border-radius:6px; padding:0 6px;" onclick="event.stopPropagation()"
+          onkeydown="event.stopPropagation(); if(event.key==='Enter'){confirmAddValue('${itemId}','${sectionKey}')} if(event.key==='Escape'){cancelAddValue()}">
+        <button class="inline-add-confirm" onclick="event.stopPropagation(); confirmAddValue('${itemId}','${sectionKey}')">✓</button>
+        <button class="inline-add-cancel" onclick="event.stopPropagation(); cancelAddValue()">×</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="value-cell add-cell"><button class="add-value-btn" onclick="event.stopPropagation(); startAddValue('${itemId}','${sectionKey}')">+ Add</button></div>`;
+}
+
+function numericSection(label, sectionKey, data, itemId, isOpen) {
+  const needsAttn = data.ok === false;
+  const dotClass = needsAttn ? "attn" : "ok";
+
+  if (needsAttn) {
+    const cells = data.values.map((c, i) => valueCell(c, sectionKey, itemId, i)).join("");
+    return `<div class="field-section needs-attn">
+      <div class="field-section-head"><span class="dot ${dotClass}"></span><span class="field-section-label">${label}</span></div>
+      <div class="field-reason">${data.reason}</div>
+      <div class="value-grid">${cells}${addValueCell(sectionKey, itemId)}</div>
+    </div>`;
+  }
+  if (!isOpen) {
+    return `<div class="field-line" onclick="event.stopPropagation(); toggleSection('${itemId}','${sectionKey}')">
+      <span class="dot ok"></span><span class="field-line-label">${label}</span>
+      <span class="field-line-value">${summarizeValues(data.values)}</span><span class="field-line-caret">edit ›</span>
+    </div>`;
+  }
+  const cells = data.values.map((c, i) => valueCell(c, sectionKey, itemId, i)).join("");
+  return `<div class="field-section">
+    <div class="field-section-head"><span class="dot ok"></span><span class="field-section-label">${label}</span>
+      <button class="field-section-collapse" onclick="event.stopPropagation(); toggleSection('${itemId}','${sectionKey}')">done</button></div>
+    <div class="value-grid">${cells}${addValueCell(sectionKey, itemId)}</div>
+  </div>`;
+}
+
+// ONE renderer for Allergens and Ingredients, always — a conflicting or
+// missing entry shows as an attn-styled chip already sitting in the list,
+// with its own confirm-check, exactly like a flagged numeric cell above.
+// There is no second control type for the flagged case.
+function entryChip(entry, sectionKey, itemId, idx) {
+  const isAttn = entry.ok === false;
+  const confirmBtn = isAttn ? `<button class="entry-chip-confirm" onclick="event.stopPropagation(); confirmEntry('${itemId}','${sectionKey}',${idx})" title="Confirm">✓</button>` : "";
+  return `<span class="entry-chip ${isAttn ? "attn" : ""}">${confirmBtn}${entry.v}<button class="entry-chip-remove" onclick="event.stopPropagation(); removeEntry('${itemId}','${sectionKey}',${idx})" title="Remove">×</button></span>`;
+}
+
+function addEntryControl(sectionKey, itemId) {
+  const key = `${itemId}:${sectionKey}`;
+  if (addingEntryFor === key) {
+    const placeholder = sectionKey === "allergens" ? "Allergen…" : "Ingredient…";
+    return inlineAddForm("newEntryInput", `confirmAddEntry('${itemId}','${sectionKey}')`, "cancelAddEntry()", placeholder);
+  }
+  return `<button class="add-entry-btn" onclick="event.stopPropagation(); startAddEntry('${itemId}','${sectionKey}')">+ Add</button>`;
+}
+
+function entryListSection(label, sectionKey, data, itemId, isOpen) {
+  const needsAttn = data.ok === false;
+  const dotClass = needsAttn ? "attn" : "ok";
+  const summary = data.entries.length ? data.entries.map(e => e.v).join(", ") : "None listed";
+
+  if (needsAttn) {
+    const chips = data.entries.map((e, i) => entryChip(e, sectionKey, itemId, i)).join("");
+    return `<div class="field-section needs-attn">
+      <div class="field-section-head"><span class="dot ${dotClass}"></span><span class="field-section-label">${label}</span></div>
+      <div class="field-reason">${data.reason}</div>
+      <div class="entry-list">${chips}${addEntryControl(sectionKey, itemId)}</div>
+    </div>`;
+  }
+  if (!isOpen) {
+    return `<div class="field-line" onclick="event.stopPropagation(); toggleSection('${itemId}','${sectionKey}')">
+      <span class="dot ok"></span><span class="field-line-label">${label}</span>
+      <span class="field-line-value">${summary}</span><span class="field-line-caret">edit ›</span>
+    </div>`;
+  }
+  const chips = data.entries.map((e, i) => entryChip(e, sectionKey, itemId, i)).join("");
+  return `<div class="field-section">
+    <div class="field-section-head"><span class="dot ok"></span><span class="field-section-label">${label}</span>
+      <button class="field-section-collapse" onclick="event.stopPropagation(); toggleSection('${itemId}','${sectionKey}')">done</button></div>
+    <div class="entry-list">${chips}${addEntryControl(sectionKey, itemId)}</div>
+  </div>`;
+}
+
+function singleField(label, data, sectionKey, itemId, isOpen) {
+  if (!data) return "";
+  const needsAttn = data.ok === false;
+  const dotClass = needsAttn ? "attn" : "ok";
+  if (!needsAttn && !isOpen) {
+    return `<div class="field-line" onclick="event.stopPropagation(); toggleSection('${itemId}','${sectionKey}')">
+      <span class="dot ok"></span><span class="field-line-label">${label}</span>
+      <span class="field-line-value">${data.value}</span><span class="field-line-caret">edit ›</span>
+    </div>`;
+  }
+  const placeholder = needsAttn ? "Enter value…" : "";
+  const control = `<div class="single-value-wrap"><input class="single-value-input" value="${data.value || ""}" placeholder="${placeholder}" onclick="event.stopPropagation()" onchange="editSingleValue('${itemId}','${sectionKey}',this)"></div>`;
+  const collapseBtn = !needsAttn ? `<button class="field-section-collapse" onclick="event.stopPropagation(); toggleSection('${itemId}','${sectionKey}')">done</button>` : "";
+  const confirmBtn = needsAttn ? `<button class="confirm-check" onclick="event.stopPropagation(); confirmSingle('${itemId}','${sectionKey}')" title="Mark confirmed">✓</button>` : "";
+  return `<div class="field-section ${needsAttn ? "needs-attn" : ""}">
+    <div class="single-field-row"><span class="dot ${dotClass}"></span><span class="field-section-label" style="width:auto; flex-shrink:0; min-width:64px;">${label}</span>${control}${confirmBtn}${collapseBtn}</div>
+    ${needsAttn ? `<div class="field-reason" style="padding-top:0;">${data.reason}</div>` : ""}
+  </div>`;
+}
+
+function imageField(data, itemId) {
+  if (data.ok) return "";
+  return `<div class="field-section needs-attn"><div class="image-row">
+    <div class="image-thumb">🍽️</div>
+    <div style="flex:1;"><div class="field-reason" style="padding:0;">${data.reason}</div></div>
+    <button class="upload-btn" onclick="event.stopPropagation(); confirmImage('${itemId}')">Upload</button>
+  </div></div>`;
+}
+
+function renderItem(item, currentLocation, currentPathKey, id, forceOpenState) {
+  const flagCount = Object.values(item.fields).filter(f => f.ok === false).length;
+  const dotClass = flagCount > 0 ? "attn" : "ok";
+  const summaryHtml = flagCount > 0 ? `<span class="flag-count">${flagCount} flagged</span>` : `<span class="summary">${item.cal}</span>`;
+  const checkedAttr = item.confirmed ? "checked" : "";
+  const moveOptionsHtmlStr = moveOptionsHtml(currentPathKey);
+
+  const isOpenItem = forceOpenState !== undefined ? forceOpenState : document.getElementById(id)?.classList.contains("open");
+  const secOpen = k => expandedSections.has(`${id}:${k}`);
+  const isPinned = pinnedItems.has(id);
+  // Pin only makes sense — and only shows — once an item is actually open;
+  // pinning a collapsed item has nothing to keep open.
+  const pinHtml = isOpenItem
+    ? `<button class="pin-btn ${isPinned ? "pinned" : ""}" onclick="togglePin('${id}')" title="${isPinned ? "Unpin — this item will auto-collapse again" : "Pin — keep this item open when others are opened"}">${isPinned ? "📌" : "📍"}</button>`
+    : "";
+
+  const fieldsHtml = imageField(item.fields.image, id)
+    + numericSection("Macros", "macros", item.fields.macros, id, secOpen("macros"))
+    + numericSection("Micros", "micros", item.fields.micros, id, secOpen("micros"))
+    + entryListSection("Allergens", "allergens", item.fields.allergens, id, secOpen("allergens"))
+    + singleField("Quantity", item.fields.quantity, "quantity", id, secOpen("quantity"))
+    + singleField("Price", item.fields.price, "price", id, secOpen("price"))
+    + entryListSection("Ingredients", "ingredients", item.fields.ingredients, id, secOpen("ingredients"));
+
+  return `<div class="item ${isOpenItem ? "open" : ""}" id="${id}">
+    <div class="row" onclick="toggle('${id}')">
+      <span class="chevron">▶</span><span class="dot ${dotClass}"></span>
+      <span class="name">${item.name}</span>${pinHtml}${summaryHtml}
+    </div>
+    <div class="expand">
+      <div class="item-breadcrumb">${currentLocation}</div>
+      <div class="field-line" onclick="event.stopPropagation()" style="cursor:default;">
+        <span class="field-line-label">Category</span>
+        <select class="category-move-select" style="flex:1; height:28px; font-size:12.5px; border:1px solid var(--line-strong); border-radius:6px; padding:0 6px;" onclick="event.stopPropagation()" onchange="moveItem('${id}', this.value)">${moveOptionsHtmlStr}</select>
+      </div>
+      <div class="field-line" onclick="event.stopPropagation()" style="cursor:default;">
+        <span class="field-line-label">Also in…</span>
+        <select class="category-move-select duplicate-select" style="flex:1; height:28px; font-size:12.5px; border:1px solid var(--line-strong); border-radius:6px; padding:0 6px;" onclick="event.stopPropagation()" onchange="duplicateItem('${id}', this.value); this.selectedIndex=0;">
+          <option value="">+ Add a copy to another category…</option>
+          ${moveOptionsHtml(null).replace('<option value="" ', '')}
+        </select>
+      </div>
+      ${fieldsHtml}
+      <div class="confirm-row">
+        <button class="delete-item-btn" onclick="event.stopPropagation(); deleteItem('${id}')">Delete item</button>
+        <label onclick="event.stopPropagation()"><input type="checkbox" ${checkedAttr}> Checked — send to app</label>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Header only — extracted so a logo upload (or any header-only change) can
+// refresh just this part without rebuilding the whole scroll and losing
+// which items the person currently has open.
+function renderReviewerHeader() {
+  const r = RESTAURANTS[currentRestaurantKey];
+  document.getElementById("reviewerTitle").textContent = r.name;
+  document.getElementById("reviewerSub").textContent = r.establishmentType === "other" && r.customTypeLabel ? r.customTypeLabel : (TYPE_LABELS[r.establishmentType] || "Other");
+  const logoSlot = document.getElementById("reviewerLogoWrap");
+  logoSlot.querySelector(".restaurant-logo").innerHTML = r.logoImg ? `<img src="${r.logoImg}" alt="">` : r.logo;
+  const bannerSlot = document.getElementById("updateBannerSlot");
+  bannerSlot.innerHTML = r.hasAutoUpdate ? `<div class="update-banner"><strong>Auto-reviewer update:</strong>&nbsp;${r.updateNote}</div>` : "";
+}
+
+// Resolves a path (array of indices) down into RESTAURANTS[currentRestaurantKey].menu,
+// returning the node at that path. Used by every rename/delete/add function
+// so none of them need to hardcode how many levels deep they're working at.
+function getNodeAtPath(path) {
+  let level = { children: RESTAURANTS[currentRestaurantKey].menu };
+  for (const idx of path) level = level.children[idx];
+  return level;
+}
+function getParentArray(path) {
+  if (path.length === 1) return RESTAURANTS[currentRestaurantKey].menu;
+  return getNodeAtPath(path.slice(0, -1)).children;
+}
+function pathKey(path) { return path.join("-"); }
+function breadcrumbFor(path) {
+  const names = [];
+  let level = { children: RESTAURANTS[currentRestaurantKey].menu };
+  for (const idx of path) { level = level.children[idx]; names.push(level.name); }
+  return names.join(" → ");
+}
+
+// One recursive renderer for a category node at any depth — this is what
+// lets Burgers -> Ginger -> Ginger 65 -> (items) render with the exact same
+// code as a single-level category, however many levels deep the real menu
+// structure goes.
+function renderCategoryNode(node, path, depth) {
+  const key = pathKey(path);
+  let html = "";
+  const rowClass = depth === 0 ? "category-row" : "subcategory-row";
+  const inputClass = depth === 0 ? "category" : "subcategory";
+  const nameStyle = depth > 1 ? ` style="padding-left:${(depth - 1) * 22}px;"` : "";
+  html += `<div class="${rowClass}"${nameStyle}><input class="${inputClass}" value="${node.name}" onchange="renameNode('${key}', this.value)"><button class="category-action-btn delete-btn" title="Delete" onclick="deleteNode('${key}')">✕</button></div>`;
+
+  // Always offer a way to add a direct item to this node — even one that
+  // was born purely deep (like Beverages, which only ever had Hot/Cold
+  // subcategories) and so never had an items[] array to begin with. Without
+  // this, a category that happens to organize its dishes into subcategories
+  // has no way to ever gain a directly-filed item later, even though the
+  // data model has always supported holding both at once.
+  if (node.items) {
+    node.items.forEach((item, itemIdx) => { itemCounter++; const id = `item-${itemCounter}`; itemIdMap.set(id, item); html += renderItem(item, breadcrumbFor(path), pathKey(path), id); });
+  }
+  const isAddingHere = addingItemFor === key;
+  const indentStyle = depth > 0 ? ` style="padding-left:${depth * 16}px;"` : "";
+  // Quieter styling specifically when this node already organizes its
+  // dishes into subcategories — this stays a small, easy-to-miss fallback
+  // for the occasional item that genuinely belongs directly on the
+  // category, not a primary action competing with the subcategories below.
+  const isFallbackOnly = !node.items && node.children && node.children.length > 0;
+  const fallbackStyle = isFallbackOnly ? "opacity:0.45; font-size:11.5px;" : "";
+  html += `<div class="add-item-row"${indentStyle}>${isAddingHere ? inlineAddForm("newItemInput", `confirmAddItem('${key}')`, "cancelAddItem()", "Item name…") : `<button class="add-item-btn" style="${fallbackStyle}" onclick="startAddItem('${key}')">+ Add item to ${node.name}</button>`}</div>`;
+  if (node.children) {
+    node.children.forEach((child, childIdx) => { html += renderCategoryNode(child, [...path, childIdx], depth + 1); });
+  }
+  // Building new tree structure (adding a subcategory) now happens only in
+  // the Menu Structure panel above — the dish list stays focused on dishes
+  // themselves, so a person isn't offered the same structural action in
+  // two different places with two different surrounding contexts.
+  return html;
+}
+
+// ============================================================
+// MENU STRUCTURE PANEL — the exception-path editor.
+// Renders the same tree as renderCategoryNode, but shows ONLY names,
+// nesting, and structure controls — never macros, allergens, or any dish
+// data. Structure-building and dish-editing are kept genuinely separate,
+// per the design: most of the time the pipeline already got the tree
+// right, so this stays collapsed and out of the way until it's needed.
+// ============================================================
+let structurePanelOpen = false;
+
+function toggleStructurePanel() {
+  structurePanelOpen = !structurePanelOpen;
+  document.getElementById("structurePanelBody").style.display = structurePanelOpen ? "block" : "none";
+  document.getElementById("structurePanelToggle").classList.toggle("open", structurePanelOpen);
+  document.getElementById("structurePanelChevron").textContent = structurePanelOpen ? "▾" : "▸";
+  if (structurePanelOpen) renderStructurePanel();
+}
+
+// Counts items directly in a node PLUS everything nested under it, for the
+// small count shown beside each row — gives a sense of scale without
+// having to open every branch.
+function countAllItemsUnder(node) {
+  let n = 0;
+  if (node.items) n += node.items.length;
+  if (node.children) node.children.forEach(c => n += countAllItemsUnder(c));
+  return n;
+}
+
+function renderStructureNode(node, path, depth) {
+  const key = pathKey(path);
+  const count = countAllItemsUnder(node);
+  const countLabel = count === 1 ? "1 item" : `${count} items`;
+  let html = `<div class="structure-node">
+    <div class="structure-node-row">
+      <input value="${node.name}" onchange="renameNode('${key}', this.value)">
+      <span class="structure-node-count">${countLabel}</span>
+      <button class="structure-node-add-item-btn" onclick="jumpToAddItem('${key}', '${node.name.replace(/'/g, "\\'")}')" title="Add a dish directly to ${node.name}">+ dish</button>
+      <button class="category-action-btn delete-btn" title="Delete" onclick="deleteNode('${key}'); renderStructurePanel();">✕</button>
+    </div>`;
+  if (node.children && node.children.length) {
+    html += `<div class="structure-children">`;
+    node.children.forEach((child, i) => { html += renderStructureNode(child, [...path, i], depth + 1); });
+    html += `</div>`;
+  }
+  const isAddingSubHere = addingSubcategoryFor === `panel:${key}`;
+  html += `<div class="structure-add-child-row">${isAddingSubHere
+    ? inlineAddForm("newSubcategoryInput", `confirmAddSubcategoryFromPanel('${key}')`, "cancelAddSubcategoryFromPanel()", "Subcategory name…")
+    : `<button class="structure-add-child-btn" onclick="startAddSubcategoryFromPanel('${key}')">+ Add subcategory to ${node.name}</button>`}</div>`;
+  html += `</div>`;
+  return html;
+}
+
+function renderStructurePanel() {
+  const r = RESTAURANTS[currentRestaurantKey];
+  let html = "";
+  r.menu.forEach((cat, i) => { html += renderStructureNode(cat, [i], 0); });
+  const isAddingRootHere = addingCategory;
+  html += `<div class="structure-add-root-row">${isAddingRootHere
+    ? inlineAddForm("newCategoryInput", "confirmAddCategory(); renderStructurePanel();", "cancelAddCategory(); renderStructurePanel();", "Category name…")
+    : `<button class="add-category-btn" onclick="startAddCategory()">+ Add category</button>`}</div>`;
+  document.getElementById("structurePanelBody").innerHTML = html;
+}
+
+// Bridge from the panel to the dish list: closes the panel, scrolls to and
+// opens the inline add-item form at the tapped node, so "press Burgers,
+// add a dish" is one motion rather than two disconnected trips.
+function jumpToAddItem(key, nodeName) {
+  structurePanelOpen = false;
+  document.getElementById("structurePanelBody").style.display = "none";
+  document.getElementById("structurePanelToggle").classList.remove("open");
+  document.getElementById("structurePanelChevron").textContent = "▸";
+  startAddItem(key);
+  setTimeout(() => { document.getElementById("newItemInput")?.scrollIntoView({ block: "center", behavior: "smooth" }); }, 50);
+}
+
+// The panel needs its own add-subcategory start/confirm/cancel so opening
+// the inline form here doesn't fight with the same-named flow already used
+// by the dish list's own inline buttons — both can be mid-edit independently.
+function startAddSubcategoryFromPanel(key) {
+  addingSubcategoryFor = `panel:${key}`;
+  renderStructurePanel();
+  document.getElementById("newSubcategoryInput")?.focus();
+}
+function cancelAddSubcategoryFromPanel() { addingSubcategoryFor = null; renderStructurePanel(); }
+function confirmAddSubcategoryFromPanel(key) {
+  const input = document.getElementById("newSubcategoryInput");
+  const name = input.value.trim();
+  if (!name) return;
+  const path = key.split("-").map(Number);
+  const node = getNodeAtPath(path);
+  if (!node.children) node.children = [];
+  node.children.push({ name, items: [] });
+  addingSubcategoryFor = null;
+  // Both views read the same underlying tree, so both must refresh — the
+  // dish list needs to know a new subcategory now exists too, not just the
+  // panel that created it.
+  renderReviewer();
+}
+
+function renderReviewer() {
+  itemCounter = 0;
+  itemIdMap = new Map();
+  const r = RESTAURANTS[currentRestaurantKey];
+  if (structurePanelOpen) renderStructurePanel();
+  renderReviewerHeader();
+
+  let html = "";
+  r.menu.forEach((cat, catIdx) => { html += renderCategoryNode(cat, [catIdx], 0); });
+  // No "+ Add category" here anymore — categories are formed once, in the
+  // Menu Structure panel above. The dish list is downstream of that: it
+  // only ever adds dishes into a structure that already exists, so a
+  // person follows one direction (form the tree, then fill it) rather than
+  // being able to grow the tree from two different places at once.
+  document.getElementById("scroll").innerHTML = html;
+  document.getElementById("totalCount").textContent = itemCounter;
+  updateProgress();
+}
+
+function toggle(id) {
+  const el = document.getElementById(id);
+  const wasOpen = el.classList.contains("open");
+  if (wasOpen) {
+    [...expandedSections].forEach(k => { if (k.startsWith(id + ":")) expandedSections.delete(k); });
+    el.classList.remove("open");
+    return;
+  }
+  // Auto-collapse: closing every other open item first, except ones the
+  // person has explicitly pinned. This keeps the scroll calm by default —
+  // at most one un-pinned item expanded at a time — while a pin lets a
+  // person deliberately compare two or more items side by side.
+  document.querySelectorAll(".item.open").forEach(openEl => {
+    if (openEl.id === id) return;
+    if (pinnedItems.has(openEl.id)) return;
+    [...expandedSections].forEach(k => { if (k.startsWith(openEl.id + ":")) expandedSections.delete(k); });
+    openEl.classList.remove("open");
+  });
+  rerenderSingleItem(id, true);
+  document.getElementById(id).classList.add("open");
+}
+function togglePin(itemId) {
+  event.stopPropagation();
+  if (pinnedItems.has(itemId)) pinnedItems.delete(itemId); else pinnedItems.add(itemId);
+  rerenderSingleItem(itemId, true);
+  document.getElementById(itemId).classList.add("open");
+}
+function toggleSection(itemId, sectionKey) {
+  const key = `${itemId}:${sectionKey}`;
+  if (expandedSections.has(key)) expandedSections.delete(key); else expandedSections.add(key);
+  rerenderSingleItem(itemId);
+}
+// Finds the actual path (array of indices) to whichever node currently
+// contains a given item — needed so a re-render can recompute the item's
+// live breadcrumb and dropdown-selection state, instead of trusting
+// whatever the DOM happened to show before the rebuild.
+function findItemPath(targetItem, nodes, path) {
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const nodePath = [...path, i];
+    if (node.items && node.items.includes(targetItem)) return nodePath;
+    if (node.children) {
+      const found = findItemPath(targetItem, node.children, nodePath);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function rerenderSingleItem(itemId, forceOpenState) {
+  const item = itemIdMap.get(itemId);
+  const el = document.getElementById(itemId);
+  if (!item || !el) return;
+  const r = RESTAURANTS[currentRestaurantKey];
+  const path = findItemPath(item, r.menu, []) || [];
+  const currentLocation = breadcrumbFor(path);
+  const currentPathKeyStr = pathKey(path);
+  // forceOpenState lets a caller that's about to open (or is already
+  // toggling) this item tell the render explicitly, rather than the render
+  // inferring it from the DOM class — which is stale mid-toggle and was
+  // silently dropping the pin button on the very click that opens an item.
+  const shouldBeOpen = forceOpenState !== undefined ? forceOpenState : el.classList.contains("open");
+  el.outerHTML = renderItem(item, currentLocation, currentPathKeyStr, itemId, shouldBeOpen);
+  if (shouldBeOpen) document.getElementById(itemId).classList.add("open");
+}
+
+function updateProgress() {
+  const boxes = document.querySelectorAll(".confirm-row input[type='checkbox']");
+  const checked = Array.from(boxes).filter(b => b.checked).length;
+  document.getElementById("confirmedCount").textContent = checked;
+  document.getElementById("progressFill").style.width = (boxes.length > 0 ? (checked / boxes.length) * 100 : 0) + "%";
+}
+document.addEventListener("change", (e) => { if (e.target.matches(".confirm-row input[type='checkbox']")) updateProgress(); });
+
+// ============================================================
+// EDIT + CONFIRM — every write flashes green and shows the toast, whether
+// it's fixing a still-attn cell or adjusting an already-ok one.
+// ============================================================
+let toastTimer = null;
+function showSavedToast() {
+  const toast = document.getElementById("savedToast");
+  toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("show"), 1100);
+}
+
+function editCellValue(itemId, sectionKey, idx, inputEl) {
+  itemIdMap.get(itemId).fields[sectionKey].values[idx].v = Number(inputEl.value);
+  showSavedToast();
+}
+function confirmCell(itemId, sectionKey, idx) {
+  const field = itemIdMap.get(itemId).fields[sectionKey];
+  field.values[idx].ok = true;
+  if (field.values.every(v => v.ok)) field.ok = true;
+  showSavedToast();
+  rerenderSingleItem(itemId);
+}
+function editSingleValue(itemId, sectionKey, inputEl) {
+  itemIdMap.get(itemId).fields[sectionKey].value = inputEl.value;
+  showSavedToast();
+}
+function confirmSingle(itemId, sectionKey) {
+  itemIdMap.get(itemId).fields[sectionKey].ok = true;
+  showSavedToast();
+  rerenderSingleItem(itemId);
+}
+function confirmEntry(itemId, sectionKey, idx) {
+  const field = itemIdMap.get(itemId).fields[sectionKey];
+  field.entries[idx].ok = true;
+  if (field.entries.every(e => e.ok)) field.ok = true;
+  showSavedToast();
+  rerenderSingleItem(itemId);
+}
+function confirmImage(itemId) {
+  itemIdMap.get(itemId).fields.image.ok = true;
+  showSavedToast();
+  rerenderSingleItem(itemId);
+}
+function startAddValue(itemId, sectionKey) {
+  addingValueFor = `${itemId}:${sectionKey}`;
+  rerenderSingleItem(itemId);
+  document.getElementById("newValueLabel")?.focus();
+}
+function cancelAddValue() {
+  const [itemId] = (addingValueFor || "").split(":");
+  addingValueFor = null;
+  if (itemId) rerenderSingleItem(itemId);
+}
+function confirmAddValue(itemId, sectionKey) {
+  const label = document.getElementById("newValueLabel").value.trim();
+  if (!label) return;
+  const unit = document.getElementById("newValueUnit").value.trim();
+  itemIdMap.get(itemId).fields[sectionKey].values.push({ l: label, v: 0, u: unit, ok: true });
+  addingValueFor = null;
+  rerenderSingleItem(itemId);
+}
+function startAddEntry(itemId, sectionKey) {
+  addingEntryFor = `${itemId}:${sectionKey}`;
+  rerenderSingleItem(itemId);
+  document.getElementById("newEntryInput")?.focus();
+}
+function cancelAddEntry() {
+  const [itemId] = (addingEntryFor || "").split(":");
+  addingEntryFor = null;
+  if (itemId) rerenderSingleItem(itemId);
+}
+function confirmAddEntry(itemId, sectionKey) {
+  const input = document.getElementById("newEntryInput");
+  const entry = input.value.trim();
+  if (!entry) return;
+  itemIdMap.get(itemId).fields[sectionKey].entries.push({ v: entry, ok: true });
+  addingEntryFor = null;
+  rerenderSingleItem(itemId);
+}
+function removeEntry(itemId, sectionKey, idx) {
+  const field = itemIdMap.get(itemId).fields[sectionKey];
+  field.entries.splice(idx, 1);
+  if (field.entries.every(e => e.ok)) field.ok = true;
+  rerenderSingleItem(itemId);
+}
+
+// ============================================================
+// CATEGORY / ITEM EDITING
+// ============================================================
+function renameNode(key, newName) {
+  const path = key.split("-").map(Number);
+  getNodeAtPath(path).name = newName;
+}
+function startAddCategory() { addingCategory = true; renderReviewer(); document.getElementById("newCategoryInput")?.focus(); }
+function cancelAddCategory() { addingCategory = false; renderReviewer(); }
+function confirmAddCategory() {
+  const input = document.getElementById("newCategoryInput");
+  const name = input.value.trim();
+  if (!name) return;
+  RESTAURANTS[currentRestaurantKey].menu.push({ name: name, items: [] });
+  addingCategory = false;
+  renderReviewer();
+}
+function deleteNode(key) {
+  const path = key.split("-").map(Number);
+  const node = getNodeAtPath(path);
+  if (!confirm(`Delete "${node.name}" and everything in it?`)) return;
+  const parentArr = getParentArray(path);
+  parentArr.splice(path[path.length - 1], 1);
+  renderReviewer();
+}
+function startAddItem(key) {
+  addingItemFor = key;
+  renderReviewer();
+  document.getElementById("newItemInput")?.focus();
+}
+function cancelAddItem() { addingItemFor = null; renderReviewer(); }
+function confirmAddItem(key) {
+  const input = document.getElementById("newItemInput");
+  const name = input.value.trim();
+  if (!name) return;
+  const blank = { name, cal: "— cal", confirmed: false, fields: {
+    image: { ok: false, reason: "Newly added — needs sourcing" },
+    macros: { ok: false, reason: "Newly added — needs data", values: [{l:"Calories",v:0,u:"kcal",ok:false},{l:"Protein",v:0,u:"g",ok:false},{l:"Carbs",v:0,u:"g",ok:false},{l:"Fat",v:0,u:"g",ok:false}] },
+    micros: { ok: false, reason: "Newly added — needs data", values: [{l:"Sodium",v:0,u:"mg",ok:false}] },
+    allergens: { ok: false, reason: "Newly added — needs data", entries: [] },
+    quantity: { ok: false, reason: "Newly added — needs data", value: "" },
+    price: { ok: false, reason: "Newly added — needs data", value: "" },
+    ingredients: { ok: false, reason: "Newly added — needs data", entries: [] },
+  }};
+  const path = key.split("-").map(Number);
+  const node = getNodeAtPath(path);
+  // A node that was born purely deep (no items[] yet, like Beverages before
+  // this fix) needs that array created the first time someone actually adds
+  // a direct item to it — this is what makes the fallback button real,
+  // not just a visible dead end.
+  if (!node.items) node.items = [];
+  node.items.push(blank);
+  addingItemFor = null;
+  renderReviewer();
+}
+function deleteItem(id) {
+  if (!confirm("Delete this item?")) return;
+  document.getElementById(id).remove();
+  updateProgress();
+  document.getElementById("totalCount").textContent = document.querySelectorAll(".item").length;
+}
+
+// Finds the array (and index within it) that currently holds a given item
+// object, searching the whole tree. Needed because itemIdMap only maps a
+// DOM id to the item itself, not to whatever array currently contains it —
+// and that array changes every time the item is moved.
+function findItemArrayAndIndex(targetItem, nodes) {
+  for (const node of nodes) {
+    if (node.items) {
+      const idx = node.items.indexOf(targetItem);
+      if (idx !== -1) return { arr: node.items, idx };
+    }
+    if (node.children) {
+      const found = findItemArrayAndIndex(targetItem, node.children);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function moveItem(id, destPathKey) {
+  if (!destPathKey) return;
+  const item = itemIdMap.get(id);
+  const r = RESTAURANTS[currentRestaurantKey];
+  const location = findItemArrayAndIndex(item, r.menu);
+  if (!location) return;
+  const destPath = destPathKey.split("-").map(Number);
+  const destNode = getNodeAtPath(destPath);
+  if (!destNode.items) destNode.items = [];
+  location.arr.splice(location.idx, 1);
+  destNode.items.push(item);
+  renderReviewer();
+}
+
+// A duplicate is a genuinely independent copy, per the confirmed design —
+// editing one afterward never affects the other. Deep-cloning the item's
+// data means the two share no references at all, not even nested objects
+// like the macro/micro value arrays.
+function duplicateItem(id, destPathKey) {
+  if (!destPathKey) return;
+  const original = itemIdMap.get(id);
+  const copy = JSON.parse(JSON.stringify(original));
+  const destPath = destPathKey.split("-").map(Number);
+  const destNode = getNodeAtPath(destPath);
+  if (!destNode.items) destNode.items = [];
+  destNode.items.push(copy);
+  renderReviewer();
+}
+
+renderAdmin();
+</script>
+</body>
+</html>

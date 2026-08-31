@@ -1,0 +1,80 @@
+# Production overlay — use explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Everything here assumes the "one server initially" deployment target
+# described in the platform requirements: no orchestrator-specific fields
+# (no Swarm `deploy.replicas` scaling assumption beyond a single node), just
+# resource ceilings and restart discipline so one runaway container can't
+# starve the others on shared hardware.
+#
+# admin-dashboard is NOT published on the host here — put a reverse proxy
+# (out of scope for this compose setup) in front of it and of `api` if
+# external access is needed; internal service-to-service traffic already
+# works over hungrx_network without any published ports.
+
+services:
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      ENVIRONMENT: production
+
+  worker:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      ENVIRONMENT: production
+
+  admin-dashboard:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      NODE_ENV: production

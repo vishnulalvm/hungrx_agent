@@ -1,0 +1,113 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /*
+     * Design tokens mirror CRUD UI DESIGN.html exactly (converted from hex
+     * to HSL for shadcn's `hsl(var(--x))` convention). Two status colors
+     * only: --ok (confirmed/correct) and --attn (needs attention) — no
+     * amber tier, per that reference.
+     */
+    --ink: 228 10% 10%;
+    --ink-soft: 224 11% 40%;
+    --ink-faint: 220 10% 64%;
+
+    --background: 0 0% 100%;
+    --foreground: 228 10% 10%;
+
+    --bg-soft: 210 17% 98%;
+
+    --accent: 217 84% 52%;
+    --accent-soft: 217 100% 96%;
+
+    --ok: 141 71% 32%;
+    --ok-soft: 144 48% 94%;
+
+    --attn: 356 71% 48%;
+    --attn-soft: 4 100% 97%;
+
+    --line: 210 13% 94%;
+    --line-strong: 214 14% 90%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 228 10% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 228 10% 10%;
+
+    --primary: 228 10% 10%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 17% 98%;
+    --secondary-foreground: 228 10% 10%;
+
+    --muted: 210 17% 98%;
+    --muted-foreground: 220 10% 64%;
+
+    --destructive: 356 71% 48%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 14% 90%;
+    --input: 214 14% 90%;
+    --ring: 217 84% 52%;
+
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    --ink: 0 0% 96%;
+    --ink-soft: 220 10% 70%;
+    --ink-faint: 220 8% 48%;
+
+    --background: 228 12% 8%;
+    --foreground: 0 0% 96%;
+
+    --bg-soft: 228 10% 12%;
+
+    --accent: 217 90% 62%;
+    --accent-soft: 217 40% 18%;
+
+    --ok: 141 55% 45%;
+    --ok-soft: 144 30% 16%;
+
+    --attn: 356 75% 60%;
+    --attn-soft: 4 40% 18%;
+
+    --line: 228 10% 18%;
+    --line-strong: 228 10% 24%;
+
+    --card: 228 12% 10%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 228 12% 10%;
+    --popover-foreground: 0 0% 96%;
+
+    --primary: 0 0% 96%;
+    --primary-foreground: 228 12% 10%;
+
+    --secondary: 228 10% 14%;
+    --secondary-foreground: 0 0% 96%;
+
+    --muted: 228 10% 14%;
+    --muted-foreground: 220 8% 55%;
+
+    --destructive: 356 75% 60%;
+    --destructive-foreground: 0 0% 96%;
+
+    --border: 228 10% 22%;
+    --input: 228 10% 22%;
+    --ring: 217 90% 62%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans);
+  }
+}

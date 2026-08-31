@@ -1,0 +1,16 @@
+# Applies to the root build context (apps/api, apps/worker)
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+node_modules
+apps/admin-dashboard/.next
+apps/admin-dashboard/node_modules
+*.md
+.env
+.env.*
+!.env.example
+docker-compose*.yml

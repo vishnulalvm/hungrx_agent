@@ -35,8 +35,12 @@ ORM models, one file per table.
   restaurant).
 - `restaurant.py` — the production tables: `Restaurant`,
   `RestaurantLocation`, `Menu`, `MenuCategory` (self-referential via
-  `parent_id`, mirroring `core.schemas.menu.MenuCategory`'s recursive
-  `children`), `Dish` (nutrition/allergens/ingredients stored as JSONB
+  `parent_id` plus the ORM `children`/`parent` relationships built on
+  top of it — `remote_side=[id]` on `parent` pins which end of the FK is
+  the parent, needed for `RestaurantRepository.get_full_tree`'s
+  `selectinload` chain to eager-load the recursive tree — mirroring
+  `core.schemas.menu.MenuCategory`'s recursive `children`), `Dish`
+  (nutrition/allergens/ingredients stored as JSONB
   whole units, not further normalized — they're always read/written as a
   unit via `core.schemas.nutrition.Nutrition`, never queried by
   individual nutrient). **Written only by**

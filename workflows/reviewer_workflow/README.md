@@ -86,38 +86,59 @@ its name" to "first published"). Same package-naming rule applies here:
      audit-visible "nothing to do" outcome and the `AgentRun` still
      completes `SUCCEEDED`. Graph routing (`_route_after_hash_polling`
      in `graph.py`), not an error, is what stops the run here.
-2. **targeted_reextraction** (`nodes/targeted_reextraction.py`) — only
-   reached when `hash_changed is True`. Re-runs the same capture +
-   AI-structuring path the collector workflow's `extraction`/
-   `multimodal_translation` nodes use — same deterministic link
-   discovery, same strict-structured-output boundary
+2. **targeted_reextraction** (`nodes/targeted_reextraction.py`, Reviewer
+   Workflow Agent 7, part 1) — only reached when `hash_changed is True`.
+   Re-runs the same capture + AI-structuring path the collector
+   workflow's `extraction`/`multimodal_translation` nodes use — same
+   deterministic link discovery, same strict-structured-output boundary
    (`AIProvider.generate_structured(..., response_model=
    ExtractionOutput)`), same "never write to a restaurant/menu/dish
    repository directly" rule — reusing
    `workflows.collector_workflow.nodes.extraction`'s `PageFetcher`/
    `CrawlerServicePageFetcher` seam directly rather than a duplicate one.
-   The one real difference: the AI's `ExtractionOutput` is mapped onto
-   the **currently published** `Restaurant` (`state["restaurant"]`)
-   instead of a blank one, so anything the fresh crawl didn't re-report
-   falls back to what's already live rather than to empty/default
-   values.
-3. **json_delta_generation** (`nodes/json_delta_generation.py`) — pure,
-   no I/O. `compute_delta(current, reextracted)` uses DeepDiff (already
-   a project dependency) over both restaurants'
-   `model_dump(mode="json")` dicts, with a custom
+   The AI's `ExtractionOutput` is mapped onto the **currently published**
+   `Restaurant` (`state["restaurant"]`) instead of a blank one, so
+   anything the fresh crawl didn't re-report falls back to what's
+   already live rather than to empty/default values. Also collects
+   **source references**: the AI output's per-dish/per-profile
+   `source_snapshot_ids` are gathered into `reextraction_source_refs` on
+   state (keyed by each dish's newly assigned real id, or the
+   `_RESTAURANT_PROFILE_REF_KEY` sentinel for restaurant-level fields),
+   since the domain schemas (`Restaurant`/`Dish`) don't carry that field
+   themselves — only the AI's `ExtractedDish`/`ExtractedRestaurantProfile`
+   do.
+3. **json_delta_generation** (`nodes/json_delta_generation.py`, Reviewer
+   Workflow Agent 7, part 2) — pure diff computation
+   (`compute_delta(current, reextracted, source_refs=...)`, no I/O) plus
+   a thin node wrapper that does have I/O: it loads production data
+   fresh. **"Compare with production data"** means the node calls
+   `RestaurantRepository.get_full_tree(restaurant_id)` immediately before
+   diffing rather than trusting `state["restaurant"]` (which could be
+   stale by the time this node runs) — the same "never trust a stale
+   caller-supplied value" principle Temporal Hash Polling applies to
+   `state["source"]`. Uses DeepDiff (already a project dependency) over
+   both restaurants' `model_dump(mode="json")` dicts, with a custom
    `iterable_compare_func` that matches list items (menus/categories/
    dishes) by their stable `id` rather than list position, and produces
    `core.schemas.diff.JSONDelta`/`FieldDelta` — the first place in the
    codebase those schemas actually get produced (every other reference
    to them, `core.schemas.proposed_change.ProposedChange`, predates the
-   workflow that fills them in). `id`/`created_at`/`updated_at` are
+   workflow that fills them in). Each `FieldDelta` carries
+   `op` (`added`/`removed`/`changed`), `old_value`/`new_value`, and
+   **`source_snapshot_ids`** — resolved by walking the change's path back
+   to the owning dish (or the restaurant profile) in
+   `reextraction_source_refs`, so every reported change is traceable to
+   the raw page material it came from. `id`/`created_at`/`updated_at` are
    filtered out at the top level (construction artifacts, not real
    content changes). An empty delta is still a valid outcome — it means
    the underlying content didn't meaningfully change even though the raw
    page bytes hashed differently (a timestamp, an ad slot) — and the run
    still continues through Delta Validation and Human Final Sync rather
    than short-circuiting a second time; only the hash check is allowed
-   to stop the run early.
+   to stop the run early. This node **never writes to production tables**
+   — `RestaurantRepository.get_full_tree` is read-only (no write
+   counterpart exists for it on that class), so nothing about computing
+   a delta, however large, changes what's actually published.
 4. **delta_validation** (`nodes/delta_validation.py`) — runs the exact
    same deterministic validation engine (`core.validation.validate`) the
    collector workflow's `deterministic_validation` node uses, against
@@ -177,13 +198,23 @@ its name" to "first published"). Same package-naming rule applies here:
   network).
 - `tests/unit/test_targeted_reextraction_node.py` — source-material-only
   prompts, mapping onto the currently published restaurant (untouched
-  fields keep their live value), fail-closed paths, using a fake
+  fields keep their live value), `reextraction_source_refs` propagation
+  (dish-level refs keyed by the new dish id, restaurant-profile refs
+  under the sentinel key, no entry when the AI reported none),
+  "never writes to production tables," fail-closed paths, using a fake
   `PageFetcher`/`AIProvider` (no real network/browser/OpenAI call).
 - `tests/unit/test_json_delta_generation.py` — pure `compute_delta`
   tests: empty delta for identical restaurants, changed/added/removed
-  detection, id/timestamp noise filtering, and the
-  `iterable_compare_func` regression case (an unrelated sibling must not
-  appear "changed" just because a list position shifted).
+  detection, id/timestamp noise filtering, the `iterable_compare_func`
+  regression case (an unrelated sibling must not appear "changed" just
+  because a list position shifted), and source-reference attachment
+  (changed dish fields, restaurant-profile fields, and the no-refs-given
+  case). The node-wrapper tests (real Postgres, `db_session`) cover
+  "compare with production data" specifically — including a case where
+  `state["restaurant"]` is deliberately stale and the node must diff
+  against the real production row instead — plus "never writes to
+  production tables" and fail-closed handling (missing input, no
+  production data to compare against).
 - `tests/unit/test_delta_validation_node.py` — pass-through/correction
   behavior and fail-closed handling; the validation rules themselves are
   already exhaustively covered in `tests/unit/test_validation_engine.py`.

@@ -39,8 +39,8 @@ ProposedChange → Approval → published Restaurant/Menu data (database/models/
 Reviewer LangGraph workflow (workflows/reviewer_workflow) — checks an
 already-published restaurant's source for drift, on demand
   1. temporal_hash_polling  — DONE (Change Detection: loads active source, SHA-256 compare, persists snapshot, records AgentRun.metrics; early-stops the run when unchanged)
-  2. targeted_reextraction  — DONE (reuses collector's capture/AI-structuring path)
-  3. json_delta_generation  — DONE (DeepDiff, produces core/schemas/diff.py's JSONDelta)
+  2. targeted_reextraction  — DONE (Agent 7 part 1: reuses collector's capture/AI-structuring path; carries source_snapshot_ids forward as reextraction_source_refs)
+  3. json_delta_generation  — DONE (Agent 7 part 2: compares against production data via RestaurantRepository.get_full_tree, DeepDiff-based, produces core/schemas/diff.py's JSONDelta with source references; never writes)
   4. delta_validation       — DONE (same core/validation/ engine, no LLM)
   5. human_final_sync       — DONE (pauses via LangGraph interrupt(); reuses ProposedChange/Approval)
   6. publish                — DONE (updates the existing production restaurant only on APPROVED)

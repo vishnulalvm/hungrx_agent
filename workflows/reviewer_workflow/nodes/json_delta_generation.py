@@ -157,7 +157,7 @@ def _resolve_source_refs(
     cursor: Any = reextracted_dict
     tokens = dotted_path.replace("]", "").replace("[", ".").split(".")
     for token in tokens:
-        if token == "dishes" or not token:
+        if not token:
             continue
         if isinstance(cursor, dict) and token in cursor:
             cursor = cursor[token]

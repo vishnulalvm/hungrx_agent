@@ -42,7 +42,11 @@ nutrition data).
   `AgentWorkflowType`. Distinct from `database/models/agent_run.py` (the
   ORM model) — this is the schema layer.
 - `diff.py` — `JSONDelta`, `FieldDelta`, `DeltaOp` for change tracking
-  (used by the audit system's old/new value capture).
+  (used by the audit system's old/new value capture, and — the first
+  real producer of these schemas — the reviewer workflow's
+  `json_delta_generation` node). `FieldDelta.source_snapshot_ids`
+  traces a specific field change back to the `SourceSnapshot`(s) it was
+  read from.
 - `audit.py` / `audit_log.py` — `AuditAction`, `AuditEntityType` enums and
   the `AuditLogEntry` response schema.
 - `auth.py` — `Permission` enum (role-based access control) and related

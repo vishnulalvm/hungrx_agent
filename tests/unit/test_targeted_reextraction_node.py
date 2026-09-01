@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import select
 
 from core.schemas.extraction_output import (
     ExtractedDish,
@@ -175,6 +176,107 @@ class TestMapsOntoCurrentRestaurant:
             for dish in category["dishes"]
         ]
         assert dish_names == ["Margherita"]
+
+
+class TestCarriesSourceReferences:
+    """reextraction_source_refs propagates the AI output's per-dish/
+    per-profile source_snapshot_ids, keyed by each dish's newly assigned
+    real id (or the restaurant-profile sentinel) — read by
+    json_delta_generation to attach provenance onto each FieldDelta."""
+
+    async def test_dish_level_refs_are_keyed_by_the_new_dish_id(self, db_session) -> None:
+        restaurant = _restaurant()
+        source = _source(restaurant.id)
+        html = "<html><body>Margherita pizza $12.99</body></html>"
+        fetcher = FakePageFetcher(pages={source.url: (SnapshotContentType.HTML, html)}, source_id=source.id)
+        storage = FakeStorageAdapter({f"/fake/{source.url}": html.encode()})
+        output = ExtractionOutput(
+            restaurant_profile=ExtractedRestaurantProfile(),
+            menus=[
+                ExtractedMenu(
+                    categories=[
+                        ExtractedMenuCategory(
+                            name="Pizzas",
+                            dishes=[
+                                ExtractedDish(
+                                    name="Margherita", confidence=0.9, source_snapshot_ids=["snap-1", "snap-2"]
+                                )
+                            ],
+                        )
+                    ]
+                )
+            ],
+        )
+        ai_provider = FakeAIProvider(output=output)
+        node = build_targeted_reextraction_node(
+            db_session, storage, settings=None, ai_provider=ai_provider, page_fetcher_factory=lambda domain: fetcher
+        )
+
+        update = await node({"source": source, "restaurant": restaurant})
+
+        mapped_dish_id = update["reextracted_structured_json"]["menus"][0]["categories"][0]["dishes"][0]["id"]
+        assert update["reextraction_source_refs"][mapped_dish_id] == ["snap-1", "snap-2"]
+
+    async def test_restaurant_profile_refs_use_the_sentinel_key(self, db_session) -> None:
+        restaurant = _restaurant()
+        source = _source(restaurant.id)
+        html = "<html><body>Cozy pizzeria</body></html>"
+        fetcher = FakePageFetcher(pages={source.url: (SnapshotContentType.HTML, html)}, source_id=source.id)
+        storage = FakeStorageAdapter({f"/fake/{source.url}": html.encode()})
+        output = ExtractionOutput(
+            restaurant_profile=ExtractedRestaurantProfile(
+                description="Cozy pizzeria.", confidence=0.9, source_snapshot_ids=["snap-9"]
+            ),
+        )
+        ai_provider = FakeAIProvider(output=output)
+        node = build_targeted_reextraction_node(
+            db_session, storage, settings=None, ai_provider=ai_provider, page_fetcher_factory=lambda domain: fetcher
+        )
+
+        update = await node({"source": source, "restaurant": restaurant})
+
+        assert update["reextraction_source_refs"]["restaurant_profile"] == ["snap-9"]
+
+    async def test_no_source_snapshot_ids_reported_leaves_no_ref_entry(self, db_session) -> None:
+        restaurant = _restaurant()
+        source = _source(restaurant.id)
+        html = "<html><body>Margherita pizza $12.99</body></html>"
+        fetcher = FakePageFetcher(pages={source.url: (SnapshotContentType.HTML, html)}, source_id=source.id)
+        storage = FakeStorageAdapter({f"/fake/{source.url}": html.encode()})
+        ai_provider = FakeAIProvider(output=_extraction_output())  # no source_snapshot_ids set
+        node = build_targeted_reextraction_node(
+            db_session, storage, settings=None, ai_provider=ai_provider, page_fetcher_factory=lambda domain: fetcher
+        )
+
+        update = await node({"source": source, "restaurant": restaurant})
+
+        assert update["reextraction_source_refs"] == {}
+
+
+class TestDoesNotUpdateProductionData:
+    async def test_never_writes_to_production_tables(self, db_session) -> None:
+        from database.models.restaurant import Restaurant as RestaurantRow
+        from database.repositories.restaurant_repository import RestaurantRepository
+
+        restaurant = _restaurant()
+        await RestaurantRepository(db_session).persist_tree(restaurant)
+        await db_session.flush()
+
+        source = _source(restaurant.id)
+        html = "<html><body>Margherita pizza $12.99</body></html>"
+        fetcher = FakePageFetcher(pages={source.url: (SnapshotContentType.HTML, html)}, source_id=source.id)
+        storage = FakeStorageAdapter({f"/fake/{source.url}": html.encode()})
+        ai_provider = FakeAIProvider(output=_extraction_output())
+        node = build_targeted_reextraction_node(
+            db_session, storage, settings=None, ai_provider=ai_provider, page_fetcher_factory=lambda domain: fetcher
+        )
+
+        await node({"source": source, "restaurant": restaurant})
+
+        row = await db_session.get(RestaurantRow, restaurant.id)
+        assert row.name == "Joe's Pizza"  # untouched — still the originally published name
+        all_rows = await db_session.execute(select(RestaurantRow))
+        assert len(all_rows.scalars().all()) == 1  # no second/duplicate row created either
 
 
 class TestFailsClosedWithoutInput:

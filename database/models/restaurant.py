@@ -122,6 +122,15 @@ class MenuCategory(Base):
 
     menu: Mapped[Menu] = relationship(back_populates="categories")
     dishes: Mapped[list["Dish"]] = relationship(back_populates="category", cascade="all, delete-orphan")
+    # Self-referential ORM relationship for parent_id above — needed for
+    # RestaurantRepository.get_full_tree to eager-load the recursive
+    # category tree (selectinload(...).selectinload(MenuCategory.children))
+    # the same way it eager-loads dishes; remote_side pins which end of
+    # the FK is "the parent" so SQLAlchemy doesn't have to guess.
+    children: Mapped[list["MenuCategory"]] = relationship(
+        back_populates="parent", cascade="all, delete-orphan"
+    )
+    parent: Mapped["MenuCategory | None"] = relationship(back_populates="children", remote_side=[id])
 
 
 class Dish(Base):

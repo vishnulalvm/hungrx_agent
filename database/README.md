@@ -25,9 +25,14 @@ ORM models, one file per table.
   Polling node needs "what was the last recorded hash for this source"
   answerable across separate runs, potentially days apart.
 - `agent_run.py` — `AgentRun`: id, workflow_type, restaurant_id
-  (nullable), status, started_at, completed_at, error_message,
-  created_at. Represents one run of a LangGraph workflow (e.g. one
-  collector-workflow invocation for one restaurant).
+  (nullable), status, started_at, completed_at, error_message, metrics
+  (JSONB, default `{}` — freeform node-contributed operational metrics
+  like fetch duration/bytes/outcome, merged not overwritten across
+  multiple `update_metrics` calls within one run; distinct from
+  `AuditLog`, which records discrete auditable events rather than a
+  run's own performance/outcome data), created_at. Represents one run of
+  a LangGraph workflow (e.g. one collector-workflow invocation for one
+  restaurant).
 - `restaurant.py` — the production tables: `Restaurant`,
   `RestaurantLocation`, `Menu`, `MenuCategory` (self-referential via
   `parent_id`, mirroring `core.schemas.menu.MenuCategory`'s recursive
@@ -59,7 +64,11 @@ transaction boundaries.
 - `audit_log_repository.py` — `create`, `list_for_entity`, `list_recent`.
 - `agent_run_repository.py` — `create` (starts a run `RUNNING`),
   `get_by_id`, `mark_succeeded`, `mark_failed` (truncates
-  `error_message` to 2000 chars).
+  `error_message` to 2000 chars), `update_metrics` (shallow-merges a
+  dict onto `AgentRun.metrics` — a later call's keys overwrite
+  same-named earlier ones, but keys neither call touches survive, so
+  multiple nodes/multiple calls within one run can each contribute
+  metrics without clobbering each other's).
 - `source_repository.py` — `create`, `get_by_id`,
   `get_verified_website_for_restaurant`, `list_for_restaurant`.
 - `restaurant_repository.py` — `RestaurantRepository`: `persist_tree(restaurant)`

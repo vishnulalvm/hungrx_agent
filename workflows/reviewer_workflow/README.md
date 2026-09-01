@@ -39,15 +39,24 @@ its name" to "first published"). Same package-naming rule applies here:
 
 ## Pipeline stages
 
-1. **temporal_hash_polling** (`nodes/temporal_hash_polling.py`) — the
-   workflow's early-out gate. Given `state["source"]`/`state["restaurant"]`
-   (the caller loads these before starting a run — this node never
-   resolves a source itself, same "never hallucinate a URL" boundary the
-   collector workflow's `source_authority` node enforces),
-   `build_temporal_hash_polling_node(session, storage, settings, *,
-   fetcher_factory=None)`:
-   - Creates an `AgentRun` (`workflow_type=REVIEWER`) at the start of
-     every invocation.
+1. **temporal_hash_polling** (`nodes/temporal_hash_polling.py`, Reviewer
+   Workflow Agent 6: Change Detection) — the workflow's early-out gate,
+   and the only node optimized specifically for minimum compute/zero LLM
+   usage: a single lightweight HTTP GET is the entire cost of a poll
+   that finds nothing changed. Given `state["restaurant"]` (required;
+   `state["source"]` is an optional caller-supplied hint, never trusted
+   as-is), `build_temporal_hash_polling_node(session, storage, settings,
+   *, fetcher_factory=None)`:
+   - **Loads the active source URL** itself, from the database, via
+     `SourceRepository.get_verified_website_for_restaurant` — never
+     trusts `state["source"]` blindly, since a caller-supplied Source
+     could be stale (a different website verified since). Falls back to
+     a caller-supplied `state["source"]` only if it's genuinely
+     `is_verified_domain=True` and the database lookup found nothing;
+     reports an error and stops (no `agent_run_id` even created) if
+     neither yields a usable source.
+   - Creates an `AgentRun` (`workflow_type=REVIEWER`) once a source is
+     resolved.
    - Looks up the most recent `SourceSnapshotRow` for the source
      (`database/repositories/source_snapshot_repository.py` — the
      durable persistence layer this workflow needed and the collector
@@ -66,6 +75,13 @@ its name" to "first published"). Same package-naming rule applies here:
    - Persists the freshly fetched snapshot **regardless of outcome** —
      "what did we last see" always reflects the most recent poll, not
      just the most recent change.
+   - **Records agent run metrics** via `AgentRunRepository.update_metrics`
+     onto `AgentRun.metrics` (a JSONB column, merged not overwritten
+     across calls within a run): `fetch_duration_ms`,
+     `content_length_bytes`, `hash_changed`, and `outcome`
+     (`"changed"`/`"unchanged"`/`"fetch_failed"`) — durable and
+     queryable, distinct from the audit log's discrete-event record
+     (also still written, for the human-readable audit trail).
    - An unchanged result is not an error: it's logged as an
      audit-visible "nothing to do" outcome and the `AgentRun` still
      completes `SUCCEEDED`. Graph routing (`_route_after_hash_polling`
@@ -152,8 +168,13 @@ its name" to "first published"). Same package-naming rule applies here:
   downstream nodes' dependencies.
 - `tests/unit/test_temporal_hash_polling_node.py` — first-ever-poll
   behavior, matching/differing hash outcomes, snapshot persistence
-  regardless of outcome, fetch-failure handling, using a fake
-  `RootPageFetcher` (no real network).
+  regardless of outcome, fetch-failure handling, loading the active
+  source from the database (ignoring a stale state-provided one; falling
+  back to a verified state-provided one when the DB lookup finds
+  nothing), `AgentRun.metrics` recording for the changed/unchanged/
+  fetch-failed outcomes, and the changed/unchanged pair named exactly
+  for what the task asked — using a fake `RootPageFetcher` (no real
+  network).
 - `tests/unit/test_targeted_reextraction_node.py` — source-material-only
   prompts, mapping onto the currently published restaurant (untouched
   fields keep their live value), fail-closed paths, using a fake

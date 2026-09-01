@@ -38,7 +38,7 @@ ProposedChange → Approval → published Restaurant/Menu data (database/models/
 
 Reviewer LangGraph workflow (workflows/reviewer_workflow) — checks an
 already-published restaurant's source for drift, on demand
-  1. temporal_hash_polling  — DONE (re-fetch + SHA-256 compare; early-stops the run when unchanged)
+  1. temporal_hash_polling  — DONE (Change Detection: loads active source, SHA-256 compare, persists snapshot, records AgentRun.metrics; early-stops the run when unchanged)
   2. targeted_reextraction  — DONE (reuses collector's capture/AI-structuring path)
   3. json_delta_generation  — DONE (DeepDiff, produces core/schemas/diff.py's JSONDelta)
   4. delta_validation       — DONE (same core/validation/ engine, no LLM)

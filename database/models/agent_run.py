@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.schemas.agent_run import AgentRunStatus, AgentWorkflowType
@@ -39,6 +39,17 @@ class AgentRun(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+
+    # Freeform, node-contributed operational metrics (fetch duration,
+    # bytes transferred, whether a source's content changed, etc.) — kept
+    # as JSONB rather than fixed columns since different nodes/workflow
+    # types record different metrics and this isn't queried by individual
+    # key, only ever read back whole for one run. Distinct from AuditLog,
+    # which records discrete auditable *events*; this is the run's own
+    # running performance/outcome data. Merged (not overwritten) across
+    # multiple update_metrics calls within one run — see
+    # AgentRunRepository.update_metrics.
+    metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

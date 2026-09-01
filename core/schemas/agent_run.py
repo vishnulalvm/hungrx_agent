@@ -6,6 +6,7 @@ audit system have something typed to reference."""
 import enum
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,3 +35,4 @@ class AgentRun(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error_message: str | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)

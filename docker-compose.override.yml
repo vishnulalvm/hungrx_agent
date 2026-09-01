@@ -23,7 +23,7 @@ services:
       - ./core:/app/core
       - ./database:/app/database
       - ./infrastructure:/app/infrastructure
-      - ./langgraph:/app/langgraph
+      - ./workflows:/app/workflows
       - ./tests:/app/tests
       - ./pyproject.toml:/app/pyproject.toml
       - ./uv.lock:/app/uv.lock
@@ -40,7 +40,7 @@ services:
       - ./core:/app/core
       - ./database:/app/database
       - ./infrastructure:/app/infrastructure
-      - ./langgraph:/app/langgraph
+      - ./workflows:/app/workflows
       - ./tests:/app/tests
       - ./pyproject.toml:/app/pyproject.toml
       - ./uv.lock:/app/uv.lock

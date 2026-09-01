@@ -2,7 +2,7 @@
 #
 # Background worker service (RQ over Redis). Built from the monorepo root so
 # it can install the shared root-level packages (core, database,
-# infrastructure, langgraph) alongside apps/worker itself.
+# infrastructure, workflows) alongside apps/worker itself.
 #
 # Build with:
 #   docker build -f apps/worker/Dockerfile -t hungrx-worker .
@@ -57,7 +57,7 @@ COPY . .
 
 CMD ["watchfiles", "--filter", "python", \
      "python -m apps.worker.app.main", \
-     "/app/apps/worker", "/app/core", "/app/database", "/app/infrastructure", "/app/langgraph"]
+     "/app/apps/worker", "/app/core", "/app/database", "/app/infrastructure", "/app/workflows"]
 
 # ---------------------------------------------------------------------------
 # prod — copies source in, no dev tooling, runs as non-root
@@ -70,7 +70,7 @@ COPY --chown=app:app apps/worker ./apps/worker
 COPY --chown=app:app core ./core
 COPY --chown=app:app database ./database
 COPY --chown=app:app infrastructure ./infrastructure
-COPY --chown=app:app langgraph ./langgraph
+COPY --chown=app:app workflows ./workflows
 COPY --chown=app:app pyproject.toml uv.lock ./
 
 RUN mkdir -p /home/app/.cache/ms-playwright \

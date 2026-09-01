@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # FastAPI API service. Built from the monorepo root so it can install the
-# shared root-level packages (core, database, infrastructure, langgraph)
+# shared root-level packages (core, database, infrastructure, workflows)
 # alongside apps/api itself.
 #
 # Build with:
@@ -55,7 +55,7 @@ EXPOSE 8000
 CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", \
      "--reload-dir", "/app/apps/api", "--reload-dir", "/app/core", \
      "--reload-dir", "/app/database", "--reload-dir", "/app/infrastructure", \
-     "--reload-dir", "/app/langgraph"]
+     "--reload-dir", "/app/workflows"]
 
 # ---------------------------------------------------------------------------
 # prod — copies source in (no bind mount), no dev tooling, runs as non-root
@@ -68,7 +68,7 @@ COPY --chown=app:app apps/api ./apps/api
 COPY --chown=app:app core ./core
 COPY --chown=app:app database ./database
 COPY --chown=app:app infrastructure ./infrastructure
-COPY --chown=app:app langgraph ./langgraph
+COPY --chown=app:app workflows ./workflows
 COPY --chown=app:app pyproject.toml uv.lock ./
 
 USER app

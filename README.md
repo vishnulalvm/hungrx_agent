@@ -7,8 +7,8 @@ Production-ready restaurant data automation platform.
 - `apps/admin-dashboard` — Next.js + TypeScript admin dashboard
 - `apps/api` — FastAPI backend
 - `apps/worker` — Background job worker (Redis-backed)
-- `langgraph/collector_workflow` — LangGraph workflow for data collection
-- `langgraph/reviewer_workflow` — LangGraph workflow for review/QA
+- `workflows/collector_workflow` — LangGraph workflow for data collection
+- `workflows/reviewer_workflow` — LangGraph workflow for review/QA
 - `core/schemas` — Shared Pydantic schemas
 - `core/validation` — Shared validation logic
 - `core/config` — Shared configuration

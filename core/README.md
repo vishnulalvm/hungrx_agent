@@ -25,6 +25,11 @@ nutrition data).
 - `nutrition.py` — `Nutrition`, `Macros`, `Micronutrients`. Fixed field
   sets only — this is the file most responsible for stopping hallucinated
   nutrition keys from AI extraction.
+- `extraction_output.py` — `ExtractionOutput` and friends: the strict,
+  AI-only output schema a model is constrained to when producing
+  structured menu/nutrition data (see `infrastructure/ai/`). Deliberately
+  separate from `restaurant.py`/`menu.py` — no `id` fields, every item
+  carries `confidence`/`source_snapshot_ids`.
 - `source.py` — `Source`, `SourceSnapshot`, `SourceType` enum,
   `SnapshotContentType` enum (HTML/PDF/SCREENSHOT).
 - `source_authority.py` — types for the source-authority resolution flow:
@@ -60,6 +65,8 @@ Everything is re-exported from `core/schemas/__init__.py` — prefer
 
 ## core/validation/
 
-Shared validation logic that doesn't belong to one specific schema.
-Currently minimal — check here before adding cross-cutting validation
-rules rather than duplicating them per-schema.
+Deterministic (no-LLM) validation engine — see `core/validation/README.md`
+for full detail. Entry point: `validate(payload: dict | Restaurant) ->
+ValidationOutcome` (`core/validation/engine.py`), used by the collector
+workflow's Deterministic Validation node
+(`workflows/collector_workflow/nodes/deterministic_validation.py`).

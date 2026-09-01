@@ -123,8 +123,36 @@ matters (naming collision with the real `langgraph` library).
    - See `infrastructure/ai/README.md` for the `AIProvider` interface
      itself and how to add a different model backend.
 4. **deterministic_validation** (`nodes/deterministic_validation.py`) —
-   placeholder. Will validate `structured_json` against `core/schemas`
-   (the `extra="forbid"` schemas) and produce `validation_result`.
+   **fully implemented**, not a placeholder, and the one collector node
+   with no AI/network/storage dependency at all —
+   `build_deterministic_validation_node(session)` only needs a DB session
+   for `AgentRun`/`AuditLog` bookkeeping. Given `state["structured_json"]`
+   from Multimodal Translation:
+   - Runs `core.validation.validate(structured_json)` — the actual rule
+     engine (schema conformance, nutrition/Atwater checks, allergen
+     taxonomy cross-checks, price validation, required-field checks,
+     duplicate detection, impossible-value detection) lives in
+     `core/validation/` (see `core/validation/README.md`), completely
+     independent of LangGraph — deterministic, no model call, unit
+     tested on its own.
+   - Sets `validation_result` (`is_valid`, `issues` — errors and
+     warnings both, distinguished by `severity`) on state.
+   - Only replaces `state["structured_json"]` when the validator actually
+     applied a safe correction (`ValidationOutcome.corrected_fields`
+     non-empty) — corrections are restricted to pure formatting
+     (whitespace collapse, currency casing, exact-duplicate-ingredient
+     removal); numeric/monetary/AI-inferred values (calories, price,
+     allergens, names) are **never** rewritten, only ever reported as an
+     issue. See `core/validation/README.md`'s "Never silently changes
+     AI-generated data" section.
+   - Fails closed (logged error) if `structured_json` is missing.
+   - When the result is invalid, or a correction was applied, with an
+     `agent_run_id` present: writes an `AGENT_RUN_TRIGGER` audit row
+     (metadata includes `is_valid`, error/warning counts, and which
+     fields were corrected) and marks the `AgentRun` `FAILED` on
+     invalid results — same audit-on-failure pattern as the earlier
+     nodes. A valid result with zero corrections writes nothing (no
+     audit noise for the common "everything's fine" case).
 5. **human_review** (`nodes/human_review.py`) — placeholder. Will surface
    `proposed_changes` for a human to approve/reject, setting
    `human_approval_status`. The conditional routing in `graph.py` already
@@ -166,12 +194,22 @@ rather than silently doing nothing.
   — verifies the request shape (`response_format`, messages), refusal
   handling, and transport-error wrapping into `AIProviderError`. No real
   network call.
+- `tests/unit/test_validation_engine.py` — extensive, pure (no DB/network)
+  tests for `core.validation` itself: every rule category, safe
+  corrections (with explicit "AI-generated data is never rewritten"
+  assertions for calories/price/allergens), determinism, and
+  input-immutability.
+- `tests/unit/test_deterministic_validation_node.py` — the LangGraph
+  node wrapper around `core.validation.validate`: `validation_result`
+  shape, `structured_json` only replaced on an actual correction,
+  fail-closed on missing input, AgentRun/AuditLog bookkeeping.
 
 All of these use the real Postgres-backed `db_session` fixture from
 `tests/conftest.py` — `build_graph`/`build_source_authority_node`/
-`build_extraction_node`/`build_multimodal_translation_node` always need a
-real `AsyncSession`, there's no in-memory mode. `build_graph` also now
-requires `storage` (`StorageAdapter`) and `ai_provider` (`AIProvider`)
-arguments (e.g. `LocalStorageAdapter(tmp_path)` and a fake `AIProvider`
-in tests) since Extraction persists crawl captures and Multimodal
-Translation calls the AI provider through them.
+`build_extraction_node`/`build_multimodal_translation_node`/
+`build_deterministic_validation_node` always need a real `AsyncSession`,
+there's no in-memory mode. `build_graph` also requires `storage`
+(`StorageAdapter`) and `ai_provider` (`AIProvider`) arguments (e.g.
+`LocalStorageAdapter(tmp_path)` and a fake `AIProvider` in tests) since
+Extraction persists crawl captures and Multimodal Translation calls the
+AI provider through them; Deterministic Validation needs neither.

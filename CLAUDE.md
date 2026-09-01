@@ -26,7 +26,7 @@ Collector LangGraph workflow (workflows/collector_workflow)
   1. source_authority  — DONE (real implementation)
   2. extraction        — DONE (real implementation; capture only, no AI)
   3. multimodal_translation — DONE (AI translation via infrastructure/ai/)
-  4. deterministic_validation — placeholder
+  4. deterministic_validation — DONE (rule engine in core/validation/, no LLM)
   5. human_review       — placeholder
   6. publish            — placeholder
       │
@@ -43,7 +43,7 @@ durable audit trail (see `database/README.md`).
 |---|---|
 | `core/schemas/` | Strict Pydantic domain schemas (Restaurant, Menu, Dish, Nutrition, Source, ProposedChange, AgentRun, audit types, auth/permissions). Source of truth for shapes. |
 | `core/config/` | Shared `Settings` (env-driven), logging setup, exception types. |
-| `core/validation/` | Shared validation logic (currently minimal). |
+| `core/validation/` | Deterministic (no-LLM) validation engine: schema, nutrition/Atwater, allergen taxonomy, price, required-field, duplicate, and impossible-value checks, plus safe (formatting-only) corrections. |
 | `database/models/` | SQLAlchemy ORM models (Postgres). Mirrors a subset of `core/schemas` for persisted entities. |
 | `database/repositories/` | Data-access layer — one repository per model, thin CRUD + query methods, no business logic. |
 | `database/migrations/` | Alembic migrations. Always autogenerate + review before applying. |
@@ -107,6 +107,17 @@ durable audit trail (see `database/README.md`).
   output. No AI node has access to a restaurant/menu/dish repository —
   only `AgentRun`/`AuditLog`, so an AI call can never itself write
   business data to the database.
+- **Deterministic validation never silently changes AI-generated data.**
+  `core/validation/engine.py`'s `validate()` only ever rewrites a value
+  via `core/validation/safe_corrections.py`, and that module is
+  restricted to pure formatting/normalization changes (whitespace
+  collapse, currency-code casing, exact-duplicate removal) — it never
+  touches a numeric, monetary, or AI-inferred field (calories, price,
+  allergens, description content, etc.). Everything else the validator
+  finds becomes a `ValidationIssue` (error or warning) for a human to
+  act on, never an automatic rewrite. Every correction actually applied
+  is recorded on `ValidationOutcome.corrected_fields` with old/new
+  values, so corrections are visible, not silent.
 
 ## Running things
 
@@ -124,13 +135,16 @@ durable audit trail (see `database/README.md`).
 Done: audit system, crawler infrastructure, core Pydantic schemas, source
 authority module, LangGraph state/graph skeleton, Collector Agent 1
 (Source Authority), Agent 2 (Extraction — capture/persist only, no AI
-interpretation), and Agent 3 (Multimodal Translation — AI structured
-extraction via `infrastructure/ai/`) — all fully implemented and tested.
+interpretation), Agent 3 (Multimodal Translation — AI structured
+extraction via `infrastructure/ai/`), and Agent 4 (Deterministic
+Validation — rule engine in `core/validation/`, no LLM involved) — all
+fully implemented and tested.
 
-Not yet built: Collector Agents 4–6 (Deterministic Validation, Human
-Review, Publish) — currently placeholder nodes in
-`workflows/collector_workflow/nodes/`; reviewer workflow (entirely
-skeleton); worker job processing (placeholder loop only). `build_graph()`
-now also requires `storage` (StorageAdapter) and `ai_provider`
-(AIProvider) arguments since Extraction persists crawl captures and
-Multimodal Translation calls the AI provider through them.
+Not yet built: Collector Agents 5–6 (Human Review, Publish) — currently
+placeholder nodes in `workflows/collector_workflow/nodes/`; reviewer
+workflow (entirely skeleton); worker job processing (placeholder loop
+only). `build_graph()` requires `storage` (StorageAdapter) and
+`ai_provider` (AIProvider) arguments since Extraction persists crawl
+captures and Multimodal Translation calls the AI provider through them;
+Deterministic Validation needs only the DB session (for AgentRun/audit
+logging on failure) — it has no AI/storage dependency at all.

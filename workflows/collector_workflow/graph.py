@@ -2,10 +2,11 @@
 
 Linear pipeline: Source Authority -> Extraction -> Multimodal Translation
 -> Deterministic Validation -> Human Review -> Publish. Source Authority
-(Agent 1), Extraction (Agent 2), and Multimodal Translation (Agent 3) are
-now fully wired to their real services; the remaining three nodes are
-still placeholders (see workflows/collector_workflow/nodes/) —
-implementing them is out of scope here.
+(Agent 1), Extraction (Agent 2), Multimodal Translation (Agent 3), and
+Deterministic Validation (Agent 4) are now fully wired to their real
+services; the remaining two nodes are still placeholders (see
+workflows/collector_workflow/nodes/) — implementing them is out of scope
+here.
 
 Human Review is drawn as a conditional edge on purpose even though its
 node body is a placeholder today: once interrupts land, an APPROVED
@@ -34,10 +35,10 @@ from infrastructure.source_authority.null_provider import NullEntityResolutionPr
 from infrastructure.source_authority.provider import EntityResolutionProvider
 from infrastructure.storage.base import StorageAdapter
 from workflows.collector_workflow.nodes import (
+    build_deterministic_validation_node,
     build_extraction_node,
     build_multimodal_translation_node,
     build_source_authority_node,
-    deterministic_validation_node,
     human_review_node,
     publish_node,
 )
@@ -92,7 +93,7 @@ def build_graph(
     graph.add_node(
         NODE_MULTIMODAL_TRANSLATION, build_multimodal_translation_node(session, storage, ai_provider)
     )
-    graph.add_node(NODE_DETERMINISTIC_VALIDATION, deterministic_validation_node)
+    graph.add_node(NODE_DETERMINISTIC_VALIDATION, build_deterministic_validation_node(session))
     graph.add_node(NODE_HUMAN_REVIEW, human_review_node)
     graph.add_node(NODE_PUBLISH, publish_node)
 

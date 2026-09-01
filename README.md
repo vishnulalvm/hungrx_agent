@@ -20,6 +20,12 @@ Production-ready restaurant data automation platform.
 - `infrastructure/queue` — Redis queue adapters
 - `tests` — Cross-cutting test suites
 
+## Context for AI assistants / new contributors
+
+See `CLAUDE.md` at the repo root for architecture, key design decisions,
+and current build status. Each module listed above also has its own
+`README.md` with more detail.
+
 ## Getting Started
 
 _TBD_

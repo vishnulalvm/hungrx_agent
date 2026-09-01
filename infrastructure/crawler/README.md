@@ -1,0 +1,63 @@
+# infrastructure/crawler/
+
+Fetches and stores content from a restaurant's *verified* website only.
+No AI extraction happens here — this module's job ends at "here is a
+hashed, stored snapshot of a page."
+
+## Domain restriction (read this first)
+
+`domain_lock.py`:
+- `extract_domain(url)` — normalizes a URL to a bare host for comparison
+  (strips `www.`).
+- `DomainVerifier` — host-exact match; deliberately does **not** allow
+  subdomains or lookalike domains to pass as the verified domain.
+- `DomainLock` — per-domain `asyncio.Lock` registry plus a minimum
+  inter-request interval, exposed via an async `throttled()` context
+  manager. Every fetch through `HttpFetcher`/`BrowserFetcher` goes through
+  this, so concurrent crawls of the same domain are serialized and
+  rate-limited automatically.
+
+This same domain-lock logic is reused (not duplicated) by
+`infrastructure/source_authority/domain_validator.py` — if you change the
+matching rules here, check that module too.
+
+## Fetching
+
+- `http_fetcher.py` — `HttpFetcher`: default fetch path, httpx-based,
+  domain-verified, robots-checked, throttled. Use this unless you
+  specifically need JS rendering.
+- `browser_fetcher.py` — `BrowserFetcher`: Playwright-based, used only
+  when a page requires JS rendering (`fetch_rendered_html`) or for
+  screenshot capture (`capture_screenshot`). Not the default path —
+  browser automation is comparatively expensive.
+- `robots.py` — `RobotsChecker`: best-effort; a missing or unreachable
+  `robots.txt` is treated as "allow," not "deny."
+- `fetch_result.py` — `FetchResult` dataclass: url, content_type,
+  content, http_status, content_length_bytes. Common return shape for
+  both fetchers.
+
+## Content processing
+
+- `hashing.py` — `sha256_hex(content: bytes) -> str`. Used to detect
+  whether a re-crawled page actually changed.
+- `metadata.py` — `extract_page_metadata(html) -> PageMetadata` (title,
+  description, canonical_url, og_title/description/image) via
+  BeautifulSoup.
+
+## Storage
+
+- `snapshot_service.py` — `SnapshotService.store_snapshot(source_id,
+  result) -> SourceSnapshot`: hashes the fetched content, persists it via
+  a `StorageAdapter` (see `infrastructure/storage/`), and returns a typed
+  `SourceSnapshot` schema.
+- `crawler_service.py` — `CrawlerService`: the top-level entry point
+  other code should call (`fetch_and_store`, `capture_screenshot`) rather
+  than reaching for `HttpFetcher`/`BrowserFetcher` directly.
+
+## Supports both HTML and PDF
+
+Content type is carried on `FetchResult`/`SourceSnapshot`
+(`SnapshotContentType` in `core/schemas/source.py`); there's no separate
+PDF-specific fetcher — the same `HttpFetcher` handles both, since the
+distinction is just content-type/handling downstream, not the fetch
+mechanism itself.

@@ -91,7 +91,7 @@ def build_graph(
         NODE_TARGETED_REEXTRACTION,
         build_targeted_reextraction_node(session, storage, resolved_settings, ai_provider),
     )
-    graph.add_node(NODE_JSON_DELTA_GENERATION, build_json_delta_generation_node())
+    graph.add_node(NODE_JSON_DELTA_GENERATION, build_json_delta_generation_node(session))
     graph.add_node(NODE_DELTA_VALIDATION, build_delta_validation_node(session))
     graph.add_node(NODE_HUMAN_FINAL_SYNC, build_human_final_sync_node(session))
     graph.add_node(NODE_PUBLISH, build_publish_node(session))

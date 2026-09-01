@@ -1,10 +1,27 @@
-"""JSON Delta Generation node (Reviewer Workflow, stage 3): computes a
-field-level diff (core.schemas.diff.JSONDelta) between the freshly
-re-extracted restaurant (state["reextracted_structured_json"]) and the
-currently published one (state["restaurant"]) — this is the first place
-in the codebase JSONDelta/FieldDelta actually get produced; every other
-schema referencing them (core.schemas.proposed_change.ProposedChange)
-was defined ahead of the workflow that fills them in.
+"""JSON Delta Generation node (Reviewer Workflow Agent 7, part 2: Targeted
+Re-Extraction and Delta Generation): computes a field-level diff
+(core.schemas.diff.JSONDelta) between the freshly re-extracted restaurant
+(state["reextracted_structured_json"]) and what's actually live in the
+production tables — this is the first place in the codebase
+JSONDelta/FieldDelta actually get produced; every other schema
+referencing them (core.schemas.proposed_change.ProposedChange) was
+defined ahead of the workflow that fills them in.
+
+"Compare with production data" means exactly that: this node reloads
+the restaurant fresh via RestaurantRepository.get_full_tree(restaurant_id)
+immediately before diffing, rather than trusting state["restaurant"] —
+the same "never trust a stale caller-supplied value, always re-check
+against the database" principle Temporal Hash Polling applies to
+state["source"]. state["restaurant"] (whatever the caller originally
+loaded the run with) is used only as a fallback identity lookup (for its
+`id`) if the production read comes back empty, which should only happen
+for a restaurant_id that was never actually published.
+
+This node never writes to the production tables — it only reads
+(get_full_tree has no write method on RestaurantRepository at all; see
+that module's docstring) and returns a delta on state for Delta
+Validation and Human Final Sync to act on. Nothing about a delta being
+computed implies anything was applied to production.
 
 Uses DeepDiff (already a project dependency, see pyproject.toml) over
 the two restaurants' `model_dump(mode="json")` dicts rather than a
@@ -39,9 +56,12 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from deepdiff import DeepDiff
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.schemas.diff import DeltaOp, FieldDelta, JSONDelta
 from core.schemas.restaurant import Restaurant
+from database.repositories.restaurant_repository import RestaurantRepository
+from workflows.reviewer_workflow.nodes.targeted_reextraction import _RESTAURANT_PROFILE_REF_KEY
 from workflows.reviewer_workflow.state import ReviewerState
 
 logger = logging.getLogger("hungrx.workflows.reviewer.json_delta_generation")
@@ -119,10 +139,64 @@ def _compare_by_id(item1: Any, item2: Any, level=None) -> bool:
     return item1 == item2
 
 
-def compute_delta(current: Restaurant, reextracted: Restaurant) -> JSONDelta:
+def _resolve_source_refs(
+    dotted_path: str, *, reextracted_dict: dict, source_refs: dict[str, list[str]]
+) -> list[str]:
+    """Finds the closest owning dish (by walking the path's dish[...]
+    segments back out to a real dish id in reextracted_dict) or falls
+    back to the restaurant-profile-level refs for any top-level scalar
+    field (description/cuisine_types/logo_url/cover_image_url). Returns
+    [] rather than guessing when neither applies (e.g. a REMOVED dish —
+    there's no reextracted-side id to look up refs for; its removal is
+    itself the fact being reported, not attributable to new material)."""
+    if not source_refs:
+        return []
+
+    # Walk path segments looking for "...dishes[N]..." and resolve N
+    # against reextracted_dict to find that dish's real id.
+    cursor: Any = reextracted_dict
+    tokens = dotted_path.replace("]", "").replace("[", ".").split(".")
+    for token in tokens:
+        if token == "dishes" or not token:
+            continue
+        if isinstance(cursor, dict) and token in cursor:
+            cursor = cursor[token]
+        elif isinstance(cursor, list) and token.lstrip("-").isdigit():
+            index = int(token)
+            if 0 <= index < len(cursor):
+                cursor = cursor[index]
+            else:
+                cursor = None
+        else:
+            cursor = None
+        if isinstance(cursor, dict) and "id" in cursor and "category_id" in cursor:
+            # Reached a dish-shaped dict — its own refs, if any, are the
+            # most specific answer for anything nested under it.
+            dish_id = str(cursor["id"])
+            if dish_id in source_refs:
+                return source_refs[dish_id]
+
+    if dotted_path.split(".")[0].split("[")[0] in (
+        "description",
+        "cuisine_types",
+        "logo_url",
+        "cover_image_url",
+    ):
+        return source_refs.get(_RESTAURANT_PROFILE_REF_KEY, [])
+
+    return []
+
+
+def compute_delta(
+    current: Restaurant, reextracted: Restaurant, *, source_refs: dict[str, list[str]] | None = None
+) -> JSONDelta:
     """Pure diff computation — no I/O, no state — kept separate from the
     node wrapper so it's directly unit-testable against plain Restaurant
-    instances."""
+    instances. `source_refs` (dish id / _RESTAURANT_PROFILE_REF_KEY ->
+    SourceSnapshot ids, as produced by targeted_reextraction.py) is
+    optional so this function stays usable without it in tests that
+    don't care about provenance."""
+    refs = source_refs or {}
     current_dict = current.model_dump(mode="json")
     reextracted_dict = reextracted.model_dump(mode="json")
 
@@ -163,12 +237,19 @@ def compute_delta(current: Restaurant, reextracted: Restaurant) -> JSONDelta:
             else:
                 old_value, new_value = None, None
 
+            source_snapshot_ids = (
+                _resolve_source_refs(dotted, reextracted_dict=reextracted_dict, source_refs=refs)
+                if op != DeltaOp.REMOVED
+                else []
+            )
+
             fields.append(
                 FieldDelta(
                     path=dotted,
                     op=op,
                     old_value=old_value,
                     new_value=new_value,
+                    source_snapshot_ids=source_snapshot_ids,
                 )
             )
 
@@ -215,12 +296,14 @@ def _lookup(data: Any, dotted_path: str) -> Any:
         return None
 
 
-def build_json_delta_generation_node() -> JSONDeltaGenerationNode:
+def build_json_delta_generation_node(session: AsyncSession) -> JSONDeltaGenerationNode:
+    restaurants = RestaurantRepository(session)
+
     async def json_delta_generation_node(state: ReviewerState) -> dict[str, Any]:
-        restaurant = state.get("restaurant")
+        state_restaurant = state.get("restaurant")
         reextracted_json = state.get("reextracted_structured_json")
 
-        if restaurant is None or reextracted_json is None:
+        if state_restaurant is None or reextracted_json is None:
             message = (
                 "ReviewerState.restaurant/reextracted_structured_json are required before "
                 "json_delta_generation runs (targeted_reextraction must succeed first)"
@@ -228,8 +311,22 @@ def build_json_delta_generation_node() -> JSONDeltaGenerationNode:
             logger.error("json_delta_generation node: %s", message)
             return {"errors": [{"node": NODE_NAME, "message": message}]}
 
+        # "Compare with production data" — reload the restaurant fresh
+        # from the production tables immediately before diffing, rather
+        # than trusting state["restaurant"] (whatever the caller loaded
+        # the run with, possibly stale by the time this node runs).
+        production_restaurant = await restaurants.get_full_tree(state_restaurant.id)
+        if production_restaurant is None:
+            message = (
+                f"json_delta_generation: no production restaurant found for "
+                f"restaurant_id={state_restaurant.id} — nothing published to compare against"
+            )
+            logger.error(message)
+            return {"errors": [{"node": NODE_NAME, "message": message}]}
+
         reextracted = Restaurant.model_validate(reextracted_json)
-        delta = compute_delta(restaurant, reextracted)
+        source_refs = state.get("reextraction_source_refs") or {}
+        delta = compute_delta(production_restaurant, reextracted, source_refs=source_refs)
 
         return {"delta": delta}
 

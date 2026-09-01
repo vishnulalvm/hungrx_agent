@@ -1,11 +1,12 @@
-"""Targeted Re-Extraction node (Reviewer Workflow, stage 2): only reached
-when Temporal Hash Polling found `hash_changed == True`. Re-runs the same
-capture + AI-structuring path the collector workflow's Extraction and
-Multimodal Translation nodes use, scoped to the one source that's known
-to have changed — "targeted" as opposed to a full from-scratch crawl of
-every page the collector workflow originally discovered, since a
-temporal re-check only needs to re-read what's actually live now, not
-rediscover the site's structure again.
+"""Targeted Re-Extraction node (Reviewer Workflow Agent 7, part 1: Targeted
+Re-Extraction and Delta Generation): only reached when Temporal Hash
+Polling found `hash_changed == True`. Re-runs the same capture +
+AI-structuring path the collector workflow's Extraction and Multimodal
+Translation nodes use, scoped to the one source that's known to have
+changed — "targeted" as opposed to a full from-scratch crawl of every
+page the collector workflow originally discovered, since a temporal
+re-check only needs to re-read what's actually live now, not rediscover
+the site's structure again.
 
 Responsibilities:
   - re-fetch the source root page (HTML/PDF) plus any menu/nutrition
@@ -23,6 +24,14 @@ Responsibilities:
     the fresh crawl didn't re-report (menus untouched by whatever
     changed, restaurant profile fields the model found nothing new for)
     fall back to what's already live, not to empty/default values
+  - carry forward source references: the AI output's per-dish/per-profile
+    `source_snapshot_ids` are collected into `reextraction_source_refs`
+    (keyed by each dish's newly assigned real id, or the
+    `_RESTAURANT_PROFILE_REF_KEY` sentinel for restaurant-level fields)
+    on state, so json_delta_generation can attach provenance onto each
+    FieldDelta it produces — the domain schemas (Restaurant/Dish)
+    themselves have no source_snapshot_ids field, only the AI's
+    ExtractedDish/ExtractedRestaurantProfile do
   - never write to a restaurant/menu/dish repository directly — this
     node only ever touches AgentRun/AuditLog, identical to the collector
     workflow's Multimodal Translation boundary
@@ -148,7 +157,8 @@ def build_targeted_reextraction_node(
                 await agent_runs.mark_failed(uuid.UUID(run_id), error_message=failure_message)
             return {"errors": [{"node": NODE_NAME, "message": failure_message}]}
 
-        mapped_restaurant = _map_onto_current(result.output, current=restaurant)
+        source_refs: dict[str, list[str]] = {}
+        mapped_restaurant = _map_onto_current(result.output, current=restaurant, source_refs=source_refs)
 
         if run_id is not None:
             await audit.log(
@@ -166,6 +176,7 @@ def build_targeted_reextraction_node(
         return {
             "reextraction_snapshots": snapshots,
             "reextracted_structured_json": mapped_restaurant.model_dump(mode="json"),
+            "reextraction_source_refs": source_refs,
         }
 
     return targeted_reextraction_node
@@ -217,8 +228,8 @@ def _build_user_content(materials: list[tuple[SourceSnapshot, str]]) -> str:
     return "\n\n---\n\n".join(sections)
 
 
-def _map_dish(extracted: ExtractedDish, *, category_id: uuid.UUID) -> Dish:
-    return Dish(
+def _map_dish(extracted: ExtractedDish, *, category_id: uuid.UUID, source_refs: dict[str, list[str]]) -> Dish:
+    dish = Dish(
         category_id=category_id,
         name=extracted.name,
         description=extracted.description,
@@ -234,22 +245,39 @@ def _map_dish(extracted: ExtractedDish, *, category_id: uuid.UUID) -> Dish:
         price=extracted.price,
         currency=extracted.currency or "USD",
     )
+    # Recorded against the dish's newly assigned real id (never the
+    # model's own output — see extraction_output.py's docstring on why
+    # AI output never carries identity) so json_delta_generation can
+    # look source references up by the same id a FieldDelta's path
+    # references.
+    if extracted.source_snapshot_ids:
+        source_refs[str(dish.id)] = list(extracted.source_snapshot_ids)
+    return dish
 
 
-def _map_category(extracted: ExtractedMenuCategory) -> MenuCategory:
+def _map_category(extracted: ExtractedMenuCategory, *, source_refs: dict[str, list[str]]) -> MenuCategory:
     category = MenuCategory(name=extracted.name)
-    category.dishes = [_map_dish(dish, category_id=category.id) for dish in extracted.dishes]
+    category.dishes = [_map_dish(dish, category_id=category.id, source_refs=source_refs) for dish in extracted.dishes]
     return category
 
 
-def _map_onto_current(output: ExtractionOutput, *, current: Restaurant) -> Restaurant:
+_RESTAURANT_PROFILE_REF_KEY = "restaurant_profile"
+
+
+def _map_onto_current(
+    output: ExtractionOutput, *, current: Restaurant, source_refs: dict[str, list[str]]
+) -> Restaurant:
     """Merges a fresh ExtractionOutput onto the *currently published*
     Restaurant, not a blank one — unlike the collector workflow's first
     pass (nothing published yet), a reviewer run's whole point is
     checking an already-live restaurant for drift, so anything the model
     reports replaces the live value and anything it reports nothing new
-    for keeps what's already published."""
+    for keeps what's already published. Mutates `source_refs` in place
+    with every mapped item's provenance, keyed by dish id (or the
+    `_RESTAURANT_PROFILE_REF_KEY` sentinel for restaurant-level fields)."""
     profile = output.restaurant_profile
+    if profile.source_snapshot_ids:
+        source_refs[_RESTAURANT_PROFILE_REF_KEY] = list(profile.source_snapshot_ids)
     return current.model_copy(
         update={
             "description": profile.description or current.description,
@@ -257,7 +285,10 @@ def _map_onto_current(output: ExtractionOutput, *, current: Restaurant) -> Resta
             "logo_url": profile.logo_url or current.logo_url,
             "cover_image_url": profile.cover_image_url or current.cover_image_url,
             "menus": [
-                Menu(name=menu.name, categories=[_map_category(cat) for cat in menu.categories])
+                Menu(
+                    name=menu.name,
+                    categories=[_map_category(cat, source_refs=source_refs) for cat in menu.categories],
+                )
                 for menu in output.menus
             ]
             or current.menus,

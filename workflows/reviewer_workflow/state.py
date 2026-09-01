@@ -68,6 +68,20 @@ class ReviewerState(TypedDict, total=False):
     reextraction_snapshots: Annotated[list[SourceSnapshot], _keep_last]
     reextracted_structured_json: dict
 
+    # Maps a dish id (str(uuid)) or the sentinel key "restaurant_profile"
+    # to the list of SourceSnapshot ids (str) that item's re-extracted
+    # data was read from — the AI output's own per-item
+    # source_snapshot_ids (core.schemas.extraction_output.ExtractedDish/
+    # ExtractedRestaurantProfile), carried forward on state since the
+    # real domain schemas (core.schemas.restaurant.Restaurant/menu.Dish)
+    # don't have a source_snapshot_ids field of their own. Read by
+    # json_delta_generation to attach source references onto each
+    # FieldDelta it produces.
+    reextraction_source_refs: dict[str, list[str]]
+
+    # JSON Delta Generation output.
+    delta: JSONDelta
+
     # JSON Delta Generation output.
     delta: JSONDelta
 

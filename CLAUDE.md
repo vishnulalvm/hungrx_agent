@@ -24,8 +24,8 @@ Crawler (infrastructure/crawler) ─▶ HTML/PDF snapshot, hashed & stored
       ▼
 Collector LangGraph workflow (workflows/collector_workflow)
   1. source_authority  — DONE (real implementation)
-  2. extraction        — placeholder
-  3. multimodal_translation — placeholder
+  2. extraction        — DONE (real implementation; capture only, no AI)
+  3. multimodal_translation — DONE (AI translation via infrastructure/ai/)
   4. deterministic_validation — placeholder
   5. human_review       — placeholder
   6. publish            — placeholder
@@ -50,6 +50,7 @@ durable audit trail (see `database/README.md`).
 | `infrastructure/crawler/` | httpx/Playwright fetching, domain locking, robots.txt checks, SHA-256 hashing, snapshot storage. Restricted to verified domains only. |
 | `infrastructure/source_authority/` | Resolves a restaurant's verified official website: entity resolution interface, aggregator blocklist, URL normalization, domain validation. |
 | `infrastructure/storage/` | `StorageAdapter` interface + local filesystem implementation for snapshot blobs. |
+| `infrastructure/ai/` | `AIProvider` interface + `OpenAIProvider` implementation — strict structured-output-only AI calls, swappable model backend. |
 | `infrastructure/queue/` | Redis queue adapter interface (worker job queue). |
 | `workflows/collector_workflow/` | LangGraph state machine that runs a restaurant through Source Authority → Extraction → ... → Publish. |
 | `workflows/reviewer_workflow/` | Second LangGraph workflow for review/QA — skeleton only, not yet built. |
@@ -91,6 +92,21 @@ durable audit trail (see `database/README.md`).
   `AgentRunRepository.create()` starts a run `RUNNING`; only whichever
   node completes the *entire* pipeline should call `mark_succeeded`.
   Individual node failures call `mark_failed` and stop that run.
+- **AI calls are strict-structured-output only, via `infrastructure/ai/AIProvider`.**
+  `AIProvider.generate_structured` takes a Pydantic model type
+  (`core/schemas/extraction_output.py`'s `ExtractionOutput`, currently)
+  and can only ever return an instance of it — `OpenAIProvider` enforces
+  this at the API level via `response_format=<model>` (OpenAI's strict
+  `json_schema` mode), not by prompt instruction. The AI-only output
+  schema is deliberately separate from the "real" domain schemas
+  (`core/schemas/restaurant.py`/`menu.py`) — no `id` fields the model
+  could collide with real primary keys, and every extracted item carries
+  `confidence`/`source_snapshot_ids`. Mapping AI output into real domain
+  objects (assigning ids, merging onto the caller-known `Restaurant`)
+  happens in Python in the calling node, never inside the model's
+  output. No AI node has access to a restaurant/menu/dish repository —
+  only `AgentRun`/`AuditLog`, so an AI call can never itself write
+  business data to the database.
 
 ## Running things
 
@@ -107,9 +123,14 @@ durable audit trail (see `database/README.md`).
 
 Done: audit system, crawler infrastructure, core Pydantic schemas, source
 authority module, LangGraph state/graph skeleton, Collector Agent 1
-(Source Authority — fully implemented and tested).
+(Source Authority), Agent 2 (Extraction — capture/persist only, no AI
+interpretation), and Agent 3 (Multimodal Translation — AI structured
+extraction via `infrastructure/ai/`) — all fully implemented and tested.
 
-Not yet built: Collector Agents 2–6 (Extraction, Multimodal Translation,
-Deterministic Validation, Human Review, Publish) — currently placeholder
-nodes in `workflows/collector_workflow/nodes/`; reviewer workflow
-(entirely skeleton); worker job processing (placeholder loop only).
+Not yet built: Collector Agents 4–6 (Deterministic Validation, Human
+Review, Publish) — currently placeholder nodes in
+`workflows/collector_workflow/nodes/`; reviewer workflow (entirely
+skeleton); worker job processing (placeholder loop only). `build_graph()`
+now also requires `storage` (StorageAdapter) and `ai_provider`
+(AIProvider) arguments since Extraction persists crawl captures and
+Multimodal Translation calls the AI provider through them.

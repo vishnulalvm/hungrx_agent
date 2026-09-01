@@ -54,6 +54,17 @@ matching rules here, check that module too.
   other code should call (`fetch_and_store`, `capture_screenshot`) rather
   than reaching for `HttpFetcher`/`BrowserFetcher` directly.
 
+## Page discovery
+
+`page_discovery.py` — `find_menu_page_links(html, base_url,
+domain_verifier)`: deterministic, keyword-based (not AI) link filtering
+to find menu/nutrition-relevant pages linked from an already-fetched
+HTML page. Only looks at link text/href, never page content — this is
+what the collector workflow's Extraction node
+(`workflows/collector_workflow/nodes/extraction.py`) uses to decide
+which additional pages to crawl beyond the source root, while staying on
+the "raw capture" side of the raw-extraction/AI-interpretation boundary.
+
 ## Supports both HTML and PDF
 
 Content type is carried on `FetchResult`/`SourceSnapshot`

@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     langgraph_checkpoint_url: str = ""
 
+    # --- AI provider (Multimodal Translation / future AI nodes) ---
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-2024-08-06"  # first model generation with strict json_schema mode
+
     # --- Crawler ---
     playwright_headless: bool = True
     crawler_user_agent: str = "hungrx-crawler/1.0"

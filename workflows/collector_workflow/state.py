@@ -74,8 +74,12 @@ class CollectorState(TypedDict, total=False):
     source_url: str
     source: Source
 
-    # Crawl capture
+    # Crawl capture. `source_snapshot` is the primary/first captured page
+    # (kept for backwards-compatible single-snapshot access);
+    # `source_snapshots` is the full set captured by the Extraction node
+    # (source page plus any discovered menu/nutrition pages/PDFs).
     source_snapshot: SourceSnapshot
+    source_snapshots: Annotated[list[SourceSnapshot], _keep_last]
 
     # Extraction output (raw, pre-normalization)
     extraction_result: ExtractionResult

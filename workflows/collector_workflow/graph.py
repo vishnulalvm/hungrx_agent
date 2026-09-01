@@ -1,30 +1,39 @@
 """Collector workflow graph skeleton.
 
-Linear pipeline for now: Source Authority -> Extraction -> Multimodal
-Translation -> Deterministic Validation -> Human Review -> Publish. Every
-node is currently a placeholder (see workflows/collector_workflow/nodes/)
-except Source Authority, which has a real service behind it
-(SourceAuthorityService) but isn't wired into the node yet either — this
-task is scoped to the graph/state skeleton compiling end-to-end, not node
-logic.
+Linear pipeline: Source Authority -> Extraction -> Multimodal Translation
+-> Deterministic Validation -> Human Review -> Publish. Source Authority
+(Agent 1) is now fully wired to SourceAuthorityService/AgentRunRepository/
+AuditService; the remaining five nodes are still placeholders (see
+workflows/collector_workflow/nodes/) — implementing them is out of scope
+here.
 
 Human Review is drawn as a conditional edge on purpose even though its
 node body is a placeholder today: once interrupts land, an APPROVED
 decision should route to Publish while REJECTED/PENDING should not — that
 branching lives at the graph-topology level and won't need to change when
 the node itself gains real logic.
+
+Because Source Authority needs a live DB session and an
+EntityResolutionProvider, `build_graph` now requires both — a graph is
+scoped to one run's dependencies, not a process-wide singleton. The
+module-level `collector_graph` below stays available for topology/import
+smoke checks (draw_mermaid, node/edge listing) but should not be invoked
+directly; a real run goes through `build_graph(session, provider)`.
 """
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from infrastructure.source_authority.null_provider import NullEntityResolutionProvider
+from infrastructure.source_authority.provider import EntityResolutionProvider
 from workflows.collector_workflow.nodes import (
+    build_source_authority_node,
     deterministic_validation_node,
     extraction_node,
     human_review_node,
     multimodal_translation_node,
     publish_node,
-    source_authority_node,
 )
 from workflows.collector_workflow.state import CollectorState
 
@@ -48,10 +57,18 @@ def _route_after_human_review(state: CollectorState) -> str:
     return END
 
 
-def build_graph() -> CompiledStateGraph:
+def build_graph(
+    session: AsyncSession, provider: EntityResolutionProvider | None = None
+) -> CompiledStateGraph:
+    """`provider` defaults to NullEntityResolutionProvider (always
+    NOT_FOUND, never a false positive) so a caller that hasn't wired up a
+    real entity-resolution backend yet still gets a graph that compiles
+    and runs safely rather than one that requires a provider to exist."""
+    resolved_provider = provider if provider is not None else NullEntityResolutionProvider()
+
     graph = StateGraph(CollectorState)
 
-    graph.add_node(NODE_SOURCE_AUTHORITY, source_authority_node)
+    graph.add_node(NODE_SOURCE_AUTHORITY, build_source_authority_node(session, resolved_provider))
     graph.add_node(NODE_EXTRACTION, extraction_node)
     graph.add_node(NODE_MULTIMODAL_TRANSLATION, multimodal_translation_node)
     graph.add_node(NODE_DETERMINISTIC_VALIDATION, deterministic_validation_node)
@@ -69,6 +86,3 @@ def build_graph() -> CompiledStateGraph:
     graph.add_edge(NODE_PUBLISH, END)
 
     return graph.compile()
-
-
-collector_graph = build_graph()

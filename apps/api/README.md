@@ -37,17 +37,29 @@ module-level `app`).
     orchestration layer, the actual validation/normalization logic lives
     in `infrastructure/source_authority/`.
   - `review_service.py` — `ReviewService`: business logic behind the
-    review-queue endpoints. `approve`/`reject`/`edit_then_approve` all
-    write an `Approval` row and an audit row *first* (in the same
-    request/transaction, so the API response is consistent even before
-    the graph finishes resuming), then resume the paused collector run
-    via `graph.ainvoke(Command(resume=decision), config={"configurable":
-    {"thread_id": proposed_change.thread_id}})`. Every action re-checks
-    the `ProposedChange` is still `PENDING` first (`409 Conflict`
-    otherwise) so a double-submit can't resume the same paused run
-    twice. Builds its own checkpointer/graph per call via
-    `infrastructure/checkpointer.py` and
-    `workflows/collector_workflow/dependencies.py`'s process defaults.
+    review-queue endpoints, shared by both the collector and reviewer
+    workflows. `approve`/`reject`/`edit_then_approve` all write an
+    `Approval` row and an audit row *first* (in the same request/
+    transaction, so the API response is consistent even before the graph
+    finishes resuming), then resume the paused run via
+    `graph.ainvoke(Command(resume=decision), config={"configurable":
+    {"thread_id": proposed_change.thread_id}})`. **Which graph** is
+    resolved per-call via `_graph_builder_for`: looks up the
+    `ProposedChange`'s `AgentRun` (through `agent_run_id`) and checks
+    `AgentRun.workflow_type` — `REVIEWER` resumes
+    `workflows/reviewer_workflow/graph.py`'s graph, anything else (or no
+    `AgentRun` found) falls back to the collector workflow's, since a
+    `ProposedChange` row itself doesn't record which workflow produced
+    it and the two graphs have entirely different node topology (see
+    `tests/integration/test_reviewer_human_in_the_loop.py` for the
+    end-to-end proof, and this module's own docstring for the bug this
+    dispatch fixed). Every action re-checks the `ProposedChange` is
+    still `PENDING` first (`409 Conflict` otherwise) so a double-submit
+    can't resume the same paused run twice. Builds its own checkpointer/
+    graph per call via `infrastructure/checkpointer.py` and
+    `workflows/collector_workflow/dependencies.py`'s process defaults
+    (reused as-is by the reviewer workflow's graph too — both take the
+    same `storage`/`ai_provider` shape).
 - `app/dependencies/` — FastAPI `Depends` wiring: `db.py` (session per
   request), `auth.py` (`CurrentUserDep`, `require_permission(...)`),
   `audit.py` (`AuditServiceDep`), `review.py` (`ReviewServiceDep`),

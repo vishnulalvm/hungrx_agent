@@ -34,6 +34,13 @@ class RestaurantRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def list_ids(self) -> list[uuid.UUID]:
+        """All published restaurant ids — used by the maintenance-polling
+        job to enumerate which restaurants to check for reviewer-workflow
+        drift. Read-only, same as get_full_tree."""
+        result = await self._session.execute(select(Restaurant.id))
+        return list(result.scalars().all())
+
     async def get_full_tree(self, restaurant_id: uuid.UUID) -> RestaurantSchema | None:
         """Reads a published restaurant back out as the same
         core.schemas.restaurant.Restaurant shape persist_tree writes from

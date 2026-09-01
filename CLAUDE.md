@@ -81,11 +81,11 @@ durable audit trail (see `database/README.md`).
 | `infrastructure/storage/` | `StorageAdapter` interface + local filesystem implementation for snapshot blobs. |
 | `infrastructure/ai/` | `AIProvider` interface + `OpenAIProvider` implementation — strict structured-output-only AI calls, swappable model backend. |
 | `infrastructure/checkpointer.py` | `get_checkpointer(settings)` — the durable (Postgres-backed) LangGraph checkpointer that makes human-in-the-loop pause/resume survive across separate API requests. |
-| `infrastructure/queue/` | Redis queue adapter interface (worker job queue). |
+| `infrastructure/queue/` | RQ/Redis background-job plumbing: named queues + retry policy, the per-restaurant dedup lock, job-status/AgentRun correlation, and the sync-RQ/async-app bridge. See `infrastructure/queue/README.md`. |
 | `workflows/collector_workflow/` | LangGraph state machine that runs a restaurant through Source Authority → Extraction → ... → Publish. |
 | `workflows/reviewer_workflow/` | LangGraph state machine that checks an already-published restaurant's source for drift (Temporal Hash Polling → ... → Human Final Sync → Publish), early-stopping when the source hash hasn't changed. Reuses the collector workflow's capture/AI-structuring path and the same ProposedChange/Approval review-queue infrastructure. |
 | `apps/api/` | FastAPI backend: auth, admin, agents, mobile routers; services (audit, auth, source authority). |
-| `apps/worker/` | Background job worker (Redis-backed) — currently a placeholder run loop. |
+| `apps/worker/` | Background job worker (RQ over Redis): restaurant ingestion, source crawling, the collector workflow, maintenance polling, the reviewer workflow, and dead-letter retry sweeps — one job type per module under `app/jobs/`. See `apps/worker/README.md`. |
 | `apps/admin-dashboard/` | Next.js + TypeScript admin UI (separate frontend app). |
 | `tests/` | Cross-cutting unit/integration tests, Postgres-backed via `tests/conftest.py`. |
 
@@ -222,6 +222,32 @@ durable audit trail (see `database/README.md`).
   which exists specifically because the collector workflow's `SourceSnapshot`s
   never had durable persistence (in-memory LangGraph state only), and a
   hash comparison across separate reviewer runs needs one.
+- **Background jobs never pre-seed graph state beyond a bare identity —
+  the graph always re-derives its own source/extraction state.**
+  `apps/worker/app/jobs/collector_workflow.py` and `reviewer_workflow.py`
+  invoke their graph from `START` with only a `Restaurant` on state; they
+  do not pass through the `source_id`/`source_snapshot_id` a preceding
+  `source_crawl`/`maintenance_polling` job produced, because
+  `source_authority_node`/`temporal_hash_polling_node` already
+  re-resolve/re-verify from the database on every run rather than
+  trusting caller-supplied state (see those nodes' own docstrings) — a
+  job passing a possibly-stale value through would just be trusting the
+  same kind of caller-supplied hint those nodes were specifically built
+  to distrust. `source_crawl`'s own root-page capture and the collector
+  workflow's `extraction` node capturing menu/nutrition pages are
+  therefore deliberately non-duplicative (different pages, different
+  purposes), not a redundant double-crawl.
+- **Per-restaurant job dedup is a Redis lock, not a database check.**
+  `infrastructure/queue/lock.py`'s `RestaurantJobLock` (`SET NX PX`,
+  keyed `(restaurant_id, job_type)`) is what every job in
+  `apps/worker/app/jobs/` acquires before doing any work, rather than
+  querying for an existing `RUNNING` `AgentRun` — a DB check has a race
+  window between "check" and "the graph's own node creates its
+  `AgentRun` row" that a job-level lock acquired before any work starts
+  does not. TTL-based (no heartbeat/lock-extension) so a crashed
+  worker's lock self-heals rather than wedging that restaurant
+  permanently; deliberately tolerates a stale lock expiring a little
+  early over adding that complexity.
 
 ## Running things
 
@@ -270,10 +296,25 @@ full node-by-node breakdown. Nothing currently triggers a reviewer run
 automatically (no scheduler/cron wired up yet) — it has to be invoked
 directly, same as the collector workflow.
 
-Not yet built: worker job processing (placeholder loop only — nothing
-currently triggers a collector or reviewer run automatically, both have
-to be invoked directly); a scheduler for periodic reviewer-workflow
-polling. `build_graph()` (both workflows) requires `storage`
+Also done: background job processing (`apps/worker/`, RQ over Redis) —
+`restaurant_ingestion` (Source Authority resolution for a brand-new
+restaurant identity), `source_crawl` (verified-source root-page capture
++ SourceSnapshot persistence), `collector_workflow` and
+`reviewer_workflow` (run the respective graph from `START`, returning
+once the run pauses at its own `interrupt()` or finishes),
+`maintenance_polling` (the periodic sweep enumerating every published
+restaurant and enqueueing one `reviewer_workflow` job each — this is
+what now actually triggers reviewer runs, previously "no scheduler/cron
+wired up"), and `retry_failed` (sweeps every queue's dead-letter
+`FailedJobRegistry`, requeueing only transient-looking failures). Every
+job is deduped per-restaurant via `infrastructure/queue/lock.py`'s
+Redis `SET NX PX` lock (`restaurant_ingestion` dedupes on a
+caller-supplied seed id instead, since no restaurant id exists yet at
+that stage) and structured-logs its lifecycle
+(`apps/worker/app/jobs/logging.py`). See `apps/worker/README.md` and
+`infrastructure/queue/README.md` for the full breakdown.
+
+`build_graph()` (both workflows) requires `storage`
 (StorageAdapter), `ai_provider` (AIProvider), and `checkpointer`
 (BaseCheckpointSaver) — none has an unsafe silent default.
 `workflows/collector_workflow/dependencies.py` provides the

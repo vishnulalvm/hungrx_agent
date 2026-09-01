@@ -1,1 +1,0 @@
-# Placeholder Playwright crawler base

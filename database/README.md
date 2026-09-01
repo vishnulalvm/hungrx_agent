@@ -62,9 +62,12 @@ transaction boundaries.
 - `proposed_change_repository.py` — `ProposedChangeRepository` (`create`,
   `get_by_id`, `get_by_thread_id` — the idempotency guard
   `workflows/collector_workflow/nodes/human_review.py` uses so a
-  LangGraph resume never creates a duplicate row, `list_pending`,
-  `update_status`) and `ApprovalRepository` (`create`,
-  `list_for_proposed_change`).
+  LangGraph resume never creates a duplicate row,
+  `get_published_for_entity` — the republish guard
+  `workflows/collector_workflow/nodes/publish.py` uses so a second
+  approved change for an already-published entity is refused rather than
+  silently overwriting it, `list_pending`, `update_status`) and
+  `ApprovalRepository` (`create`, `list_for_proposed_change`).
 - `user_repository.py`, `refresh_token_repository.py` — auth data access.
 
 ## database/migrations/

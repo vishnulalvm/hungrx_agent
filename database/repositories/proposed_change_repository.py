@@ -52,6 +52,20 @@ class ProposedChangeRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_published_for_entity(self, entity_id: uuid.UUID) -> ProposedChange | None:
+        """Looks up an already-PUBLISHED ProposedChange for a given
+        entity_id. Used by the publish node to refuse republishing over
+        an existing production restaurant — publish always represents a
+        new entity, never a silent overwrite; see that node's docstring
+        on preserving version/history."""
+        result = await self._session.execute(
+            select(ProposedChange).where(
+                ProposedChange.entity_id == entity_id,
+                ProposedChange.status == ProposedChangeStatus.PUBLISHED,
+            )
+        )
+        return result.scalars().first()
+
     async def list_pending(self, *, limit: int = 100) -> list[ProposedChange]:
         result = await self._session.execute(
             select(ProposedChange)

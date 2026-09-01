@@ -205,15 +205,37 @@ matters (naming collision with the real `langgraph` library).
      graph-routing bug, even though topology already only routes here on
      APPROVED — and refuses to write (returns an error instead) if it
      somehow wasn't.
+   - **Re-validates immediately before commit**: re-runs
+     `core.validation.validate(structured_json)` (the same deterministic
+     engine `deterministic_validation` uses) and refuses to publish on
+     any `ERROR`-severity issue. Necessary because a reviewer's
+     `edit_then_approve` can hand this node data that was never re-run
+     through validation after being hand-edited — an approval is a
+     decision about *some* version of the data, not a guarantee the
+     final `structured_json` still passes.
+   - **Refuses to republish** an `entity_id` that already has a
+     `PUBLISHED` `ProposedChange` (`ProposedChangeRepository.
+     get_published_for_entity`) — publish always represents a brand-new
+     entity, never a silent overwrite of an existing production
+     restaurant, so every prior `ProposedChange`/`Approval` for that
+     entity is preserved as history rather than superseded.
    - Parses `state["structured_json"]` back into a `Restaurant` and calls
      `RestaurantRepository.persist_tree(...)`, which recursively inserts
      the restaurant, its locations, menus, the (possibly deeply nested)
-     category tree, and every dish.
+     category tree, and every dish. Nothing in this node (or
+     `persist_tree`) ever calls `commit()` — every write, including the
+     `ProposedChange`/`AgentRun`/audit updates below, rides in the
+     caller's own transaction, so any failure (re-validation, a DB
+     constraint violation, anything) leaves the whole tree unwritten
+     rather than partially committed — see
+     `tests/unit/test_publish_node.py`'s `TestRollsBackOnFailure`.
    - Marks the `ProposedChange` `PUBLISHED`, writes a
      `PROPOSED_CHANGE_PUBLISH` audit row, and marks the `AgentRun`
      `SUCCEEDED` — this is the one node in the pipeline that finalizes an
      `AgentRun` as done, since it's the terminal success state of the
-     whole pipeline.
+     whole pipeline. Any refusal path (unapproved, re-validation failure,
+     republish attempt) instead marks the `AgentRun` `FAILED` with a
+     descriptive error message, when an `agent_run_id` is present.
    - Returns `published_restaurant_id` on state — its mere presence on a
      finished run's result is itself evidence the data passed human
      review and was actually written.
@@ -295,7 +317,15 @@ double-resume the same paused graph run.
   (restaurant + full menu tree including dishes), ProposedChange/
   AgentRun/AuditLog bookkeeping, and — tested directly at the node level,
   not just via graph routing — that it refuses to write for every
-  non-APPROVED status and for APPROVED-but-missing-data states.
+  non-APPROVED status and for APPROVED-but-missing-data states. Also:
+  `TestRevalidatesBeforeCommit` (a reviewer-edited payload that now fails
+  deterministic validation is refused, even though `human_approval_status`
+  is `APPROVED`, and marks the `AgentRun` `FAILED`),
+  `TestPreventsRepublishing` (a second `APPROVED` `ProposedChange` for an
+  already-published `entity_id` is refused, and the first publish's
+  history is untouched), and `TestRollsBackOnFailure` (a real Postgres
+  `IntegrityError` partway through the tree write leaves zero rows behind
+  once the caller's transaction is rolled back).
 - `tests/integration/test_human_in_the_loop.py` — the full HTTP-level
   cycle through the real FastAPI app and a real paused graph: pending
   list, review detail, approve → publish, reject → no publish,

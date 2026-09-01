@@ -41,9 +41,9 @@ already-published restaurant's source for drift, on demand
   1. temporal_hash_polling  — DONE (Change Detection: loads active source, SHA-256 compare, persists snapshot, records AgentRun.metrics; early-stops the run when unchanged)
   2. targeted_reextraction  — DONE (Agent 7 part 1: reuses collector's capture/AI-structuring path; carries source_snapshot_ids forward as reextraction_source_refs)
   3. json_delta_generation  — DONE (Agent 7 part 2: compares against production data via RestaurantRepository.get_full_tree, DeepDiff-based, produces core/schemas/diff.py's JSONDelta with source references; never writes)
-  4. delta_validation       — DONE (same core/validation/ engine, no LLM)
-  5. human_final_sync       — DONE (pauses via LangGraph interrupt(); reuses ProposedChange/Approval)
-  6. publish                — DONE (updates the existing production restaurant only on APPROVED)
+  4. delta_validation       — DONE (Agent 8 part 1: full-record validation, but reported issues scoped to changed/new dishes via state["delta"])
+  5. human_final_sync       — DONE (Agent 8 part 2: pauses via LangGraph interrupt(); reuses ProposedChange/Approval)
+  6. publish                — DONE (Agent 8 part 2 cont.: PATCH-style — only delta-named rows touched, via nodes/delta_patch.py; only on APPROVED)
 ```
 
 **Human-in-the-loop, concretely**: `human_review_node` creates a
@@ -187,6 +187,29 @@ durable audit trail (see `database/README.md`).
   exists yet) are deliberately separate implementations of the same
   guarantee, not a shared node — their write semantics (insert-only vs.
   update-in-place) are opposite by design.
+- **The reviewer workflow's publish node applies PATCH-style, not a full
+  tree replace.** `workflows/reviewer_workflow/nodes/delta_patch.py`'s
+  `apply_patch` walks the *approved* `JSONDelta`'s ADDED/REMOVED/CHANGED
+  entries and touches only the specific restaurant-level scalar columns
+  and dish rows the delta actually names — an untouched dish's row is
+  never flushed, let alone deleted and recreated with a new physical
+  identity. This still runs inside the caller's existing session (no
+  commit inside the node), so a failure partway through leaves nothing
+  partially applied once the caller rolls back — the collector workflow's
+  publish node has no equivalent concern since it always inserts a
+  brand-new tree wholesale.
+- **`ReviewService` (`apps/api/app/services/review_service.py`) resolves
+  which workflow's graph to resume via `AgentRun.workflow_type`, looked
+  up through `ProposedChange.agent_run_id`.** A `ProposedChange` row
+  itself doesn't record which workflow created it, and the collector and
+  reviewer workflows' graphs have entirely different node names/topology
+  — resuming the wrong one fails outright rather than silently doing the
+  wrong thing, but getting the dispatch right matters for every
+  `/api/v1/admin/reviews/{id}/approve|reject|edit-approve` call to work
+  at all for a reviewer-workflow-paused run. Defaults to the collector
+  workflow's graph when no `AgentRun` is found (a human-authored
+  `ProposedChange` with no `agent_run_id`), preserving this service's
+  original behavior for that case.
 - **The reviewer workflow's early-stop gate is graph routing, not an
   error.** `temporal_hash_polling`'s `hash_changed == False` is a normal,
   successful outcome (the `AgentRun` completes `SUCCEEDED`) — it's

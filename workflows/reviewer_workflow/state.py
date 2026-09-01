@@ -82,9 +82,6 @@ class ReviewerState(TypedDict, total=False):
     # JSON Delta Generation output.
     delta: JSONDelta
 
-    # JSON Delta Generation output.
-    delta: JSONDelta
-
     # Delta Validation output.
     validation_result: ValidationResult
     validated_structured_json: dict

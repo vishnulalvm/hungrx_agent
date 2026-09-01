@@ -1,34 +1,50 @@
 """Business logic for the admin review queue: listing pending
-ProposedChanges, reading one in detail, and resuming its paused collector
-run with an approve/reject/edit-then-approve decision.
+ProposedChanges, reading one in detail, and resuming its paused
+collector- or reviewer-workflow run with an approve/reject/edit-then-
+approve decision.
 
 This is the service the admin API's /reviews endpoints
 (apps/api/app/routers/v1/admin/router.py) call into. It owns the only
-code path that resumes a graph interrupted at
-workflows.collector_workflow.nodes.human_review — every decision goes
+code path that resumes a graph interrupted at either
+workflows.collector_workflow.nodes.human_review or
+workflows.reviewer_workflow.nodes.human_final_sync — every decision goes
 through `resume_review`, so every decision is auditable and, for
 approve/edit_then_approve, ends with either a real production write (via
 the graph's publish node) or a clearly reported failure — never a
 silent partial state.
+
+Which graph to resume: a ProposedChange itself doesn't record which
+workflow created it, but its `agent_run_id` references an `AgentRun`
+row, and `AgentRun.workflow_type` does — see `_graph_builder_for` below.
+Getting this wrong isn't a cosmetic issue: the two graphs have different
+node names/topology entirely, so resuming a reviewer-workflow-paused run
+against the collector workflow's graph would fail outright rather than
+silently do the wrong thing (LangGraph would look for a checkpointed
+node that doesn't exist in that graph) — still worth getting right
+upfront rather than relying on that failure mode.
 """
 
 import uuid
-from typing import Any
+from typing import Any, Callable
 
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.app.services.audit_service import AuditService
 from core.config.exceptions import ConflictError, NotFoundError
 from core.config.settings import Settings
+from core.schemas.agent_run import AgentWorkflowType
 from core.schemas.audit import AuditAction, AuditEntityType
 from core.schemas.proposed_change import ProposedChangeStatus
 from database.models.proposed_change import ProposedChange
 from database.models.user import User
+from database.repositories.agent_run_repository import AgentRunRepository
 from database.repositories.proposed_change_repository import ApprovalRepository, ProposedChangeRepository
 from infrastructure.checkpointer import get_checkpointer
 from workflows.collector_workflow.dependencies import default_ai_provider, default_storage_adapter
-from workflows.collector_workflow.graph import build_graph
+from workflows.collector_workflow.graph import build_graph as build_collector_graph
+from workflows.reviewer_workflow.graph import build_graph as build_reviewer_graph
 
 
 class ReviewOutcome:
@@ -50,6 +66,7 @@ class ReviewService:
         self._proposed_changes = ProposedChangeRepository(session)
         self._approvals = ApprovalRepository(session)
         self._audit = AuditService(session)
+        self._agent_runs = AgentRunRepository(session)
 
     async def list_pending(self, *, limit: int = 100) -> list[ProposedChange]:
         return await self._proposed_changes.list_pending(limit=limit)
@@ -110,6 +127,24 @@ class ReviewService:
             edited_structured_json=edited_structured_json,
         )
 
+    async def _graph_builder_for(
+        self, record: ProposedChange
+    ) -> Callable[..., CompiledStateGraph]:
+        """Resolves which workflow's build_graph to use for resuming
+        `record`'s paused run — looked up via AgentRun.workflow_type
+        (ProposedChange.agent_run_id -> AgentRun), since the
+        ProposedChange row itself doesn't record which workflow created
+        it. Defaults to the collector workflow's graph when no
+        agent_run_id/AgentRun is found (matches this service's original,
+        collector-only behavior, so nothing already relying on that
+        default silently changes) — a human-authored ProposedChange with
+        no agent_run_id at all is the only case that reaches here."""
+        if record.agent_run_id is not None:
+            run = await self._agent_runs.get_by_id(record.agent_run_id)
+            if run is not None and run.workflow_type == AgentWorkflowType.REVIEWER:
+                return build_reviewer_graph
+        return build_collector_graph
+
     async def _require_pending(self, proposed_change_id: uuid.UUID) -> ProposedChange:
         record = await self._proposed_changes.get_by_id(proposed_change_id)
         if record is None:
@@ -160,6 +195,8 @@ class ReviewService:
 
         errors: list[dict] = []
         published_restaurant_id: str | None = None
+
+        build_graph = await self._graph_builder_for(record)
 
         async with get_checkpointer(self._settings) as checkpointer:
             graph = build_graph(

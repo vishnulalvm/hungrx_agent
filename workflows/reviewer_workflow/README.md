@@ -139,45 +139,61 @@ its name" to "first published"). Same package-naming rule applies here:
    — `RestaurantRepository.get_full_tree` is read-only (no write
    counterpart exists for it on that class), so nothing about computing
    a delta, however large, changes what's actually published.
-4. **delta_validation** (`nodes/delta_validation.py`) — runs the exact
-   same deterministic validation engine (`core.validation.validate`) the
-   collector workflow's `deterministic_validation` node uses, against
-   the full re-extracted restaurant (a field-level diff alone can't
-   independently check something like Atwater consistency or duplicate-
-   dish detection). Same "never silently change AI-generated data"
-   guarantee — only ever replaces data via
-   `core.validation.safe_corrections` (pure formatting), everything else
-   becomes a reported issue.
-5. **human_final_sync** (`nodes/human_final_sync.py`) — the graph's
-   human-in-the-loop pause point, reusing the exact same `ProposedChange`/
-   interrupt/resume mechanics as the collector workflow's `human_review`
-   node (idempotent creation via `ProposedChangeRepository.
-   get_by_thread_id`, `interrupt(review_task)`, decision mapped onto
-   `human_approval_status`) rather than a separate implementation — the
-   admin review-queue infrastructure (`apps/api/app/services/
-   review_service.py`, the `/api/v1/admin/reviews` endpoints) doesn't
-   care which workflow produced a given `ProposedChange`, only that its
-   `thread_id` can resume the paused run that created it. The interrupt
-   payload additionally carries `delta` (the field-level diff) alongside
-   the usual `is_valid`/`issue_count`, so a reviewer sees what changed,
-   not just the final state.
-6. **publish** (`nodes/publish.py`) — the reviewer workflow's own
-   terminal node, not shared with the collector workflow's
-   `workflows.collector_workflow.nodes.publish`. Same core guarantees
-   (re-checks `human_approval_status == APPROVED` itself, re-validates
-   immediately before commit, refuses on any `ERROR`-severity issue) but
-   a different write shape: a reviewer-workflow publish always updates
-   an **already-published** restaurant (the collector workflow's
-   `publish_node` refuses to republish an existing `entity_id` — that
-   guard is specific to the collector inserting a brand-new restaurant),
-   so this node deletes the prior production tree
-   (`RestaurantRepository`'s ORM cascade handles
-   locations/menus/categories/dishes) and re-inserts the validated one
-   with the same restaurant id, inside the same uncommitted transaction
-   as everything else — a failure partway through still leaves nothing
-   written once the caller rolls back. Refuses outright if no existing
+4. **delta_validation** (`nodes/delta_validation.py`, Reviewer Workflow
+   Agent 8, part 1) — runs the exact same deterministic validation engine
+   (`core.validation.validate`) the collector workflow's
+   `deterministic_validation` node uses, against the **full** re-extracted
+   restaurant — a field-level diff alone can't independently check
+   something like Atwater consistency or duplicate-dish detection, so the
+   engine always sees the whole record; `is_valid` and whether a safe
+   correction gets applied always reflect that full, unscoped run. What
+   IS scoped ("validate only changed/new data where safe") is which
+   issues get **reported**: an issue on a dish nobody touched this run
+   (pre-existing in the currently published data) is filtered out of
+   `validation_result["issues"]` — it was already true before this run
+   and isn't this run's job to re-surface — using `state["delta"]` to
+   determine which `menus[N].categories[N]...dishes[N]` prefixes were
+   ADDED/CHANGED. Restaurant-level/schema-level issues (no specific dish
+   in their path) are never filtered, since they're not attributable to
+   one item. Same "never silently change AI-generated data" guarantee as
+   the collector workflow — only ever replaces data via
+   `core.validation.safe_corrections` (pure formatting).
+5. **human_final_sync** (`nodes/human_final_sync.py`, Reviewer Workflow
+   Agent 8, part 2) — the graph's human-in-the-loop pause point, reusing
+   the exact same `ProposedChange`/interrupt/resume mechanics as the
+   collector workflow's `human_review` node (idempotent creation via
+   `ProposedChangeRepository.get_by_thread_id`, `interrupt(review_task)`,
+   decision mapped onto `human_approval_status`) rather than a separate
+   implementation — the admin review-queue infrastructure
+   (`apps/api/app/services/review_service.py`, the `/api/v1/admin/reviews`
+   endpoints) resolves which workflow's graph to resume via
+   `AgentRun.workflow_type` (looked up through `ProposedChange.
+   agent_run_id`), so the same endpoints correctly drive either
+   workflow's paused run. The interrupt payload additionally carries
+   `delta` (the field-level diff) alongside the usual
+   `is_valid`/`issue_count`, so a reviewer sees what changed, not just
+   the final state.
+6. **publish** (`nodes/publish.py`, Reviewer Workflow Agent 8, part 2
+   continued) — the reviewer workflow's own terminal node, not shared
+   with the collector workflow's `workflows.collector_workflow.nodes.
+   publish`. Same core guarantees (re-checks `human_approval_status ==
+   APPROVED` itself, re-validates immediately before commit, refuses on
+   any `ERROR`-severity issue — "never automatically overwrite
+   production data without the required approval policy," enforced at
+   two independent layers: graph routing plus this node's own re-check,
+   same pattern as the collector workflow) but a different write shape:
+   **PATCH-style application** — `nodes/delta_patch.py`'s `apply_patch`
+   walks the *approved* `state["delta"]`'s ADDED/REMOVED/CHANGED entries
+   and touches only the specific restaurant-level scalar columns and
+   dish rows the delta actually names (insert for ADDED, delete for
+   REMOVED, update-in-place for CHANGED); an untouched dish's row is
+   never even flushed, let alone deleted and recreated. This still runs
+   inside the caller's existing session/transaction (nothing here
+   commits), so a failure partway through leaves nothing partially
+   applied once the caller rolls back — "apply approved PATCH-style
+   updates transactionally," literally. Refuses outright if no existing
    production row exists for the entity (this workflow never creates a
-   restaurant, only updates one).
+   restaurant, only updates one) and if `state["delta"]` is missing.
 
 ## Testing
 
@@ -216,16 +232,44 @@ its name" to "first published"). Same package-naming rule applies here:
   production tables" and fail-closed handling (missing input, no
   production data to compare against).
 - `tests/unit/test_delta_validation_node.py` — pass-through/correction
-  behavior and fail-closed handling; the validation rules themselves are
-  already exhaustively covered in `tests/unit/test_validation_engine.py`.
+  behavior and fail-closed handling (the validation rules themselves are
+  already exhaustively covered in `tests/unit/test_validation_engine.py`),
+  plus `TestScopesReportedIssuesToChangedOrNewData`: an issue on an
+  untouched dish is filtered from the report (while `is_valid` still
+  reflects it), an issue on a touched dish is reported, no delta on state
+  reports everything unscoped (backwards-compatible default), and a
+  restaurant-level issue is never filtered regardless of what the delta
+  touched.
 - `tests/unit/test_human_final_sync_node.py` — pause/resume against a
   real Postgres-backed checkpointer (mirroring
   `tests/unit/test_human_review_node.py`'s structure), plus the
   reviewer-specific case of approving an update to an already-published
   restaurant.
+- `tests/unit/test_delta_patch.py` — `apply_patch`'s row-level PATCH
+  precision directly: a touched restaurant-level scalar is patched, an
+  untouched one isn't; a changed dish field updates only that dish's row
+  while an untouched sibling is provably left alone; an added dish is
+  inserted without touching siblings; a removed dish is deleted without
+  touching siblings; multiple `FieldDelta`s on the same dish collapse
+  into one row update; an empty or unresolvable delta is a safe no-op
+  (never raises, never mutates).
 - `tests/unit/test_reviewer_publish_node.py` — updates an existing
-  production row, refuses when no production row exists yet, refuses on
-  re-validation failure, refuses unapproved data.
+  production row PATCH-style (`TestPatchStylePrecision` proves an
+  untouched dish's row is never modified even when the whole restaurant
+  was re-validated), refuses when no production row exists yet, refuses
+  on re-validation failure, refuses unapproved data, refuses when
+  `state["delta"]` is missing.
+- `tests/integration/test_reviewer_human_in_the_loop.py` — end-to-end
+  through the real admin API (`/api/v1/admin/reviews/{id}/approve`
+  `/reject`), proving `ReviewService` correctly resumes the **reviewer**
+  workflow's graph (not the collector's) for a `ProposedChange` whose
+  `AgentRun.workflow_type == REVIEWER` — the specific bug this task's
+  implementation fixed in `apps/api/app/services/review_service.py` (see
+  that module's docstring): before this fix, every resume unconditionally
+  built the collector workflow's graph, which would have failed outright
+  against anything the reviewer workflow paused. Same
+  `TEST_DATABASE_URL`-override pattern as
+  `tests/integration/test_human_in_the_loop.py`.
 
 All of these use the real Postgres-backed `db_session` fixture from
 `tests/conftest.py`; anything touching `human_final_sync`'s actual

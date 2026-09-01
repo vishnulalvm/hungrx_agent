@@ -65,7 +65,9 @@ def _initial_state(restaurant: Restaurant, agent_run_id: str) -> dict:
         "restaurant": restaurant,
         "validated_structured_json": restaurant.model_dump(mode="json"),
         "validation_result": {"is_valid": True, "issues": []},
-        "delta": JSONDelta(fields=[FieldDelta(path="name", op=DeltaOp.CHANGED, old_value="a", new_value="b")]),
+        "delta": JSONDelta(
+            fields=[FieldDelta(path="description", op=DeltaOp.CHANGED, old_value="a", new_value="b")]
+        ),
         "agent_run_id": agent_run_id,
     }
 
@@ -97,7 +99,7 @@ class TestPauses:
         )
 
         payload = result["__interrupt__"][0].value
-        assert payload["delta"]["fields"][0]["path"] == "name"
+        assert payload["delta"]["fields"][0]["path"] == "description"
 
 
 class TestCreatesProposedChangeOnPause:
@@ -120,7 +122,7 @@ class TestResume:
 
         graph = _build_sync_publish_graph(db_session, checkpointer)
         agent_run_id = str(uuid.uuid4())
-        updated = restaurant.model_copy(update={"name": "Joe's Pizza (Updated)"})
+        updated = restaurant.model_copy(update={"description": "A new description."})
         await graph.ainvoke(_initial_state(updated, agent_run_id), _thread_config(agent_run_id))
         await db_session.commit()
 
@@ -136,7 +138,7 @@ class TestResume:
         from database.models.restaurant import Restaurant as RestaurantRow
 
         row = await db_session.get(RestaurantRow, restaurant.id)
-        assert row.name == "Joe's Pizza (Updated)"
+        assert row.description == "A new description."
 
     async def test_resume_with_reject_leaves_the_published_restaurant_untouched(
         self, db_session, checkpointer

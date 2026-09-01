@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import select
 
 from core.schemas.agent_run import AgentWorkflowType
+from core.schemas.diff import DeltaOp, FieldDelta, JSONDelta
 from core.schemas.menu import Dish, Menu, MenuCategory
 from core.schemas.nutrition import Macros, Nutrition
 from core.schemas.restaurant import Restaurant, RestaurantLocation
@@ -79,6 +80,114 @@ class TestAppliesSafeCorrectionsOnly:
 
         corrected_dish = update["validated_structured_json"]["menus"][0]["categories"][0]["dishes"][0]
         assert Decimal(corrected_dish["price"]) == Decimal("999999")
+
+
+class TestScopesReportedIssuesToChangedOrNewData:
+    """"Validate only changed/new data where safe": is_valid always
+    reflects the FULL, unscoped validation run — only which issues are
+    REPORTED gets scoped down to what the delta says is
+    ADDED/CHANGED. An issue on a dish nobody touched this run
+    (pre-existing, unrelated to whatever changed at the source) is
+    filtered out of the report; restaurant-level/schema-level issues are
+    never filtered, since they're not attributable to one specific item.
+    """
+
+    async def test_issue_on_an_untouched_dish_is_not_reported(self, db_session) -> None:
+        # dish 0 has a pre-existing issue (implausible price) but the
+        # delta only reports dish 1 as changed — dish 0's issue must not
+        # appear in the reported issues, even though is_valid still
+        # reflects it.
+        untouched_dish_with_issue = _dish(name="Untouched Burger", price=Decimal("999"))
+        touched_dish = _dish(name="Changed Fries", price=Decimal("5.00"))
+        restaurant = _restaurant_with_dishes(untouched_dish_with_issue, touched_dish)
+        node = build_delta_validation_node(db_session)
+
+        delta = JSONDelta(
+            fields=[
+                FieldDelta(
+                    path="menus[0].categories[0].dishes[1].price",
+                    op=DeltaOp.CHANGED,
+                    old_value="4.00",
+                    new_value="5.00",
+                )
+            ]
+        )
+
+        update = await node(
+            {"reextracted_structured_json": restaurant.model_dump(mode="json"), "delta": delta}
+        )
+
+        # Full validation still finds the untouched dish's issue (so
+        # is_valid still reflects reality)...
+        assert update["validation_result"]["is_valid"] is False
+        # ...but it's not among the REPORTED issues, since that dish
+        # wasn't touched by this run's delta.
+        reported_paths = [issue["field_path"] for issue in update["validation_result"]["issues"]]
+        assert not any("dishes[0]" in path for path in reported_paths)
+
+    async def test_issue_on_a_touched_dish_is_reported(self, db_session) -> None:
+        touched_dish_with_issue = _dish(name="Changed Burger", price=Decimal("999"))
+        restaurant = _restaurant_with_dishes(touched_dish_with_issue)
+        node = build_delta_validation_node(db_session)
+
+        delta = JSONDelta(
+            fields=[
+                FieldDelta(
+                    path="menus[0].categories[0].dishes[0].price",
+                    op=DeltaOp.CHANGED,
+                    old_value="4.00",
+                    new_value="999",
+                )
+            ]
+        )
+
+        update = await node(
+            {"reextracted_structured_json": restaurant.model_dump(mode="json"), "delta": delta}
+        )
+
+        reported_paths = [issue["field_path"] for issue in update["validation_result"]["issues"]]
+        assert any("dishes[0]" in path for path in reported_paths)
+
+    async def test_no_delta_on_state_reports_every_issue_unscoped(self, db_session) -> None:
+        # Backwards-compatible behavior: without a delta at all (e.g. a
+        # direct call, or an earlier node failed to produce one), every
+        # issue is reported — same as before scoping existed.
+        restaurant = _restaurant_with_dishes(_dish(price=Decimal("999")))
+        node = build_delta_validation_node(db_session)
+
+        update = await node({"reextracted_structured_json": restaurant.model_dump(mode="json")})
+
+        reported_paths = [issue["field_path"] for issue in update["validation_result"]["issues"]]
+        assert any("dishes[0]" in path for path in reported_paths)
+
+    async def test_restaurant_level_issue_is_never_filtered(self, db_session) -> None:
+        # A restaurant with no locations triggers a required-field
+        # error at the restaurant level, not scoped to any dish — must
+        # always be reported regardless of what the delta touched.
+        dish = _dish()
+        category = MenuCategory(name="Pizzas", dishes=[dish])
+        menu = Menu(categories=[category])
+        restaurant = Restaurant(name="Joe's Pizza", locations=[], menus=[menu])
+        node = build_delta_validation_node(db_session)
+
+        # Delta only reports a dish-level change — nothing restaurant-level.
+        delta = JSONDelta(
+            fields=[
+                FieldDelta(
+                    path="menus[0].categories[0].dishes[0].price",
+                    op=DeltaOp.CHANGED,
+                    old_value="10.00",
+                    new_value="12.99",
+                )
+            ]
+        )
+
+        update = await node(
+            {"reextracted_structured_json": restaurant.model_dump(mode="json"), "delta": delta}
+        )
+
+        reported_paths = [issue["field_path"] for issue in update["validation_result"]["issues"]]
+        assert "locations" in reported_paths
 
 
 class TestFailsClosedWithoutInput:

@@ -1,8 +1,12 @@
 """Password hashing, JWT issuance/verification, and refresh-token hashing.
 
 Production practices in play:
-  - passwords hashed with bcrypt (via passlib), never stored/logged in
-    plaintext, never echoed back in any response schema.
+  - passwords hashed with bcrypt (via the `bcrypt` library directly —
+    passlib's bcrypt backend detection is broken against bcrypt>=4.1,
+    which dropped the `__about__` attribute passlib probes for; calling
+    bcrypt directly sidesteps that unmaintained compatibility shim
+    entirely), never stored/logged in plaintext, never echoed back in any
+    response schema.
   - short-lived access tokens (default 60 min) carry the user's role so
     authorization checks don't need a DB round trip on every request.
   - refresh tokens are long-lived but tracked server-side by the SHA-256
@@ -17,26 +21,34 @@ Production practices in play:
 
 import hashlib
 import secrets
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 
 from core.config.settings import Settings
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 TokenType = Literal["access", "refresh"]
+
+# bcrypt's underlying algorithm silently truncates at 72 bytes; rejecting
+# longer input up front means a very long passphrase never gets silently
+# weakened (its extra characters ignored) without the caller knowing.
+_MAX_PASSWORD_BYTES = 72
 
 
 def hash_password(plain_password: str) -> str:
-    return _pwd_context.hash(plain_password)
+    encoded = plain_password.encode("utf-8")
+    if len(encoded) > _MAX_PASSWORD_BYTES:
+        raise ValueError(f"Password must be at most {_MAX_PASSWORD_BYTES} bytes")
+    return bcrypt.hashpw(encoded, bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return _pwd_context.verify(plain_password, hashed_password)
+    encoded = plain_password.encode("utf-8")
+    if len(encoded) > _MAX_PASSWORD_BYTES:
+        return False
+    return bcrypt.checkpw(encoded, hashed_password.encode("utf-8"))
 
 
 def hash_token(raw_token: str) -> str:
@@ -59,6 +71,12 @@ def create_access_token(*, subject: str, role: str, settings: Settings) -> str:
         "sub": subject,
         "type": "access",
         "role": role,
+        # A random jti guarantees two access tokens for the same user are
+        # never byte-identical, even when minted within the same second
+        # (iat/exp only carry second precision) — e.g. immediately after a
+        # refresh. Not tracked server-side like the refresh token's jti;
+        # access tokens stay stateless by design.
+        "jti": secrets.token_urlsafe(16),
         "iat": now,
         "exp": now + _token_expiry("access", settings),
     }
@@ -87,7 +105,3 @@ def decode_token(token: str, settings: Settings) -> dict[str, Any]:
     """Raises jwt.PyJWTError (or a subclass) on an invalid/expired token —
     callers translate that into UnauthorizedError."""
     return jwt.decode(token, settings.api_secret_key, algorithms=[settings.jwt_algorithm])
-
-
-def new_user_id() -> uuid.UUID:
-    return uuid.uuid4()

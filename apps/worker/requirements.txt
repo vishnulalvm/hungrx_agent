@@ -20,7 +20,7 @@ async-timeout==5.0.1 ; python_full_version < '3.11.3'
 asyncpg==0.31.0
     # via hungrx-agent
 bcrypt==5.0.0
-    # via passlib
+    # via hungrx-agent
 beautifulsoup4==4.15.0
     # via hungrx-agent
 cachebox==5.2.3
@@ -43,6 +43,10 @@ deepdiff==9.1.0
     # via hungrx-agent
 distro==1.9.0
     # via langsmith
+dnspython==2.8.0
+    # via email-validator
+email-validator==2.3.0
+    # via hungrx-agent
 fastapi==0.141.1
     # via hungrx-agent
 greenlet==3.5.5
@@ -73,6 +77,7 @@ httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscrip
 idna==3.19
     # via
     #   anyio
+    #   email-validator
     #   httpx
     #   httpx2
     #   requests
@@ -129,8 +134,6 @@ packaging==26.3
     # via
     #   langchain-core
     #   langsmith
-passlib==1.7.4
-    # via hungrx-agent
 playwright==1.62.0
     # via hungrx-agent
 psycopg==3.3.4

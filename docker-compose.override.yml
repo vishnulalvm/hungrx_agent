@@ -24,6 +24,7 @@ services:
       - ./database:/app/database
       - ./infrastructure:/app/infrastructure
       - ./langgraph:/app/langgraph
+      - ./tests:/app/tests
       - ./pyproject.toml:/app/pyproject.toml
       - ./uv.lock:/app/uv.lock
     ports:
@@ -40,6 +41,7 @@ services:
       - ./database:/app/database
       - ./infrastructure:/app/infrastructure
       - ./langgraph:/app/langgraph
+      - ./tests:/app/tests
       - ./pyproject.toml:/app/pyproject.toml
       - ./uv.lock:/app/uv.lock
     environment:

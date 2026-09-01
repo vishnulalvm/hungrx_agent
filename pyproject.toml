@@ -11,6 +11,7 @@ dependencies = [
     # --- Schemas / validation / settings ---
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    "email-validator>=2.2",
 
     # --- Database ---
     "sqlalchemy>=2.0",
@@ -38,7 +39,7 @@ dependencies = [
 
     # --- Auth ---
     "pyjwt>=2.9",
-    "passlib[bcrypt]>=1.7",
+    "bcrypt>=4.0",
 ]
 
 [dependency-groups]

@@ -27,12 +27,32 @@ Collector LangGraph workflow (workflows/collector_workflow)
   2. extraction        — DONE (real implementation; capture only, no AI)
   3. multimodal_translation — DONE (AI translation via infrastructure/ai/)
   4. deterministic_validation — DONE (rule engine in core/validation/, no LLM)
-  5. human_review       — placeholder
-  6. publish            — placeholder
+  5. human_review       — DONE (pauses via LangGraph interrupt(); see below)
+  6. publish            — DONE (writes production tables only on APPROVED)
       │
+      ▼ (pause — durable across requests, via AsyncPostgresSaver)
+Admin review API (GET/POST /api/v1/admin/reviews/...) ──▶ approve / reject / edit-then-approve
+      │ (resumes the paused graph via Command(resume=...))
       ▼
-ProposedChange → Approval → published Restaurant/Menu data
+ProposedChange → Approval → published Restaurant/Menu data (database/models/restaurant.py)
 ```
+
+**Human-in-the-loop, concretely**: `human_review_node` creates a
+`ProposedChange` row (PENDING) and calls LangGraph's `interrupt()`,
+which suspends the run — the API request that triggered the collector
+run returns with the run "paused," not "finished." An admin later calls
+`GET /api/v1/admin/reviews` (pending queue), `GET .../reviews/{id}`
+(detail), then one of `POST .../approve`, `.../reject`, or
+`.../edit-approve`. Each of those calls `ReviewService`, which resumes
+the *same* graph run (looked up by `ProposedChange.thread_id`, which
+equals the original `agent_run_id`) via `graph.ainvoke(Command(resume=...),
+config)`. Only `approve`/`edit_then_approve` route to `publish_node`,
+which is the only code in the repo permitted to write to the
+`restaurants`/`menus`/`menu_categories`/`dishes` tables — see
+`workflows/collector_workflow/README.md` for the full node-by-node
+breakdown and `infrastructure/checkpointer.py` for why a real
+Postgres-backed checkpointer (not the in-memory default) is required for
+this to survive across separate HTTP requests.
 
 Everything that mutates state goes through `AuditService` so there's a
 durable audit trail (see `database/README.md`).
@@ -44,13 +64,14 @@ durable audit trail (see `database/README.md`).
 | `core/schemas/` | Strict Pydantic domain schemas (Restaurant, Menu, Dish, Nutrition, Source, ProposedChange, AgentRun, audit types, auth/permissions). Source of truth for shapes. |
 | `core/config/` | Shared `Settings` (env-driven), logging setup, exception types. |
 | `core/validation/` | Deterministic (no-LLM) validation engine: schema, nutrition/Atwater, allergen taxonomy, price, required-field, duplicate, and impossible-value checks, plus safe (formatting-only) corrections. |
-| `database/models/` | SQLAlchemy ORM models (Postgres). Mirrors a subset of `core/schemas` for persisted entities. |
+| `database/models/` | SQLAlchemy ORM models (Postgres), including the production `restaurants`/`menus`/`menu_categories`/`dishes` tables (written only by `publish_node`) and the `proposed_changes`/`approvals` review-queue tables. |
 | `database/repositories/` | Data-access layer — one repository per model, thin CRUD + query methods, no business logic. |
 | `database/migrations/` | Alembic migrations. Always autogenerate + review before applying. |
 | `infrastructure/crawler/` | httpx/Playwright fetching, domain locking, robots.txt checks, SHA-256 hashing, snapshot storage. Restricted to verified domains only. |
 | `infrastructure/source_authority/` | Resolves a restaurant's verified official website: entity resolution interface, aggregator blocklist, URL normalization, domain validation. |
 | `infrastructure/storage/` | `StorageAdapter` interface + local filesystem implementation for snapshot blobs. |
 | `infrastructure/ai/` | `AIProvider` interface + `OpenAIProvider` implementation — strict structured-output-only AI calls, swappable model backend. |
+| `infrastructure/checkpointer.py` | `get_checkpointer(settings)` — the durable (Postgres-backed) LangGraph checkpointer that makes human-in-the-loop pause/resume survive across separate API requests. |
 | `infrastructure/queue/` | Redis queue adapter interface (worker job queue). |
 | `workflows/collector_workflow/` | LangGraph state machine that runs a restaurant through Source Authority → Extraction → ... → Publish. |
 | `workflows/reviewer_workflow/` | Second LangGraph workflow for review/QA — skeleton only, not yet built. |
@@ -118,6 +139,35 @@ durable audit trail (see `database/README.md`).
   act on, never an automatic rewrite. Every correction actually applied
   is recorded on `ValidationOutcome.corrected_fields` with old/new
   values, so corrections are visible, not silent.
+- **Human-in-the-loop pause/resume uses a real, durable LangGraph
+  checkpointer — never `MemorySaver`.** The API request that pauses a
+  collector run at `human_review` (via LangGraph's `interrupt()`) is
+  never the same request that later resumes it after an admin's
+  decision, so the paused state has to survive on something other than
+  process memory. `infrastructure/checkpointer.py`'s `AsyncPostgresSaver`
+  (from `langgraph-checkpoint-postgres`) persists it to the same Postgres
+  database as everything else. `build_graph()` requires a `checkpointer`
+  argument with no unsafe default for the same reason `storage`/
+  `ai_provider` have none.
+- **`human_review_node`'s ProposedChange creation is idempotent by
+  `thread_id` lookup, not by anything carried on state.** LangGraph
+  replays a node function from the top on resume, with the *same* input
+  state as before the interrupt (nothing the node itself returned after
+  its own `interrupt()` call is part of that replay's input) — a naive
+  "have I already created this" check against state would create a
+  second `ProposedChange` row on every resume. `ProposedChangeRepository.get_by_thread_id`
+  is the actual guard. See `workflows/collector_workflow/nodes/human_review.py`'s
+  docstring and `tests/unit/test_human_review_node.py`'s
+  `TestIdempotentRecordCreation` for the specific bug this prevents.
+- **"Do not allow unapproved data into production tables" is enforced at
+  two independent layers.** (1) Graph topology: only
+  `human_approval_status == ProposedChangeStatus.APPROVED` — set
+  exclusively from a real resumed admin decision, never a default —
+  routes to `publish_node`. (2) `publish_node` itself re-checks that
+  status before writing anyway (defense in depth against a routing bug
+  elsewhere), and `RestaurantRepository` (the only code that writes
+  `restaurants`/`menus`/`menu_categories`/`dishes`) is imported nowhere
+  except that one node.
 
 ## Running things
 
@@ -126,25 +176,40 @@ durable audit trail (see `database/README.md`).
 - Tests: `docker compose exec -e TEST_DATABASE_URL="postgresql+asyncpg://postgres:postgres@postgres:5432/hungrx_test" api uv run pytest tests/ -q`
 - Migrations: `docker compose exec api uv run alembic -c database/alembic.ini revision --autogenerate -m "..."`, then `upgrade head` — always review the generated file before applying.
 - Tests are Postgres-backed (not SQLite/mocks) via `tests/conftest.py`'s
-  `db_session` fixture (savepoint-per-test rollback). External
-  dependencies (e.g. entity resolution providers) are faked via real
-  implementations of the relevant interface, not mocked.
+  `db_session` fixture (savepoint-per-test rollback) and, for anything
+  touching human_review's interrupt/resume, its `checkpointer` fixture
+  (a real `AsyncPostgresSaver` against `TEST_DATABASE_URL` — an
+  in-memory checkpointer wouldn't prove anything about durability).
+  External dependencies (e.g. entity resolution providers) are faked via
+  real implementations of the relevant interface, not mocked. Note:
+  checkpoint rows written via the `checkpointer` fixture live outside
+  `db_session`'s rolled-back transaction (separate psycopg connection)
+  and are not automatically cleaned up — tests use a fresh random
+  `thread_id` per test to stay isolated regardless.
 
 ## Status (as of 2026-09-01)
 
 Done: audit system, crawler infrastructure, core Pydantic schemas, source
-authority module, LangGraph state/graph skeleton, Collector Agent 1
-(Source Authority), Agent 2 (Extraction — capture/persist only, no AI
-interpretation), Agent 3 (Multimodal Translation — AI structured
-extraction via `infrastructure/ai/`), and Agent 4 (Deterministic
-Validation — rule engine in `core/validation/`, no LLM involved) — all
-fully implemented and tested.
+authority module, LangGraph state/graph skeleton, and all six Collector
+agents — Source Authority, Extraction (capture/persist only, no AI
+interpretation), Multimodal Translation (AI structured extraction via
+`infrastructure/ai/`), Deterministic Validation (rule engine in
+`core/validation/`, no LLM involved), Human Review (LangGraph
+interrupt/resume, backed by `infrastructure/checkpointer.py`), and
+Publish (writes `database/models/restaurant.py`'s production tables,
+reachable only on an approved review) — all fully implemented and
+tested, plus the admin review API
+(`apps/api/app/routers/v1/admin/router.py`'s `/reviews` endpoints via
+`apps/api/app/services/review_service.py`).
 
-Not yet built: Collector Agents 5–6 (Human Review, Publish) — currently
-placeholder nodes in `workflows/collector_workflow/nodes/`; reviewer
-workflow (entirely skeleton); worker job processing (placeholder loop
-only). `build_graph()` requires `storage` (StorageAdapter) and
-`ai_provider` (AIProvider) arguments since Extraction persists crawl
-captures and Multimodal Translation calls the AI provider through them;
-Deterministic Validation needs only the DB session (for AgentRun/audit
-logging on failure) — it has no AI/storage dependency at all.
+Not yet built: the reviewer workflow (entirely skeleton — QA on already-
+published data, distinct from the collector workflow's human review
+step); worker job processing (placeholder loop only — nothing currently
+triggers a collector run automatically, it has to be invoked directly).
+`build_graph()` requires `storage` (StorageAdapter), `ai_provider`
+(AIProvider), and `checkpointer` (BaseCheckpointSaver) — none has an
+unsafe silent default. `workflows/collector_workflow/dependencies.py`
+provides the process-default `storage`/`ai_provider` instances
+`ReviewService` uses when resuming a review (its `_LazyOpenAIProvider`
+defers OpenAI API-key validation until actually called, since resuming
+a paused human_review never re-reaches multimodal_translation).

@@ -1,30 +1,31 @@
-"""Collector workflow graph skeleton.
+"""Collector workflow graph.
 
 Linear pipeline: Source Authority -> Extraction -> Multimodal Translation
--> Deterministic Validation -> Human Review -> Publish. Source Authority
-(Agent 1), Extraction (Agent 2), Multimodal Translation (Agent 3), and
-Deterministic Validation (Agent 4) are now fully wired to their real
-services; the remaining two nodes are still placeholders (see
-workflows/collector_workflow/nodes/) — implementing them is out of scope
-here.
+-> Deterministic Validation -> Human Review -> Publish. Every node is now
+fully wired to its real service; Human Review (Agent 5) is where the
+graph actually pauses via LangGraph's `interrupt()` (see
+workflows/collector_workflow/nodes/human_review.py) until an admin API
+endpoint resumes it with an approve/reject/edit decision — see
+apps/api/app/services/review_service.py for the resume side.
 
-Human Review is drawn as a conditional edge on purpose even though its
-node body is a placeholder today: once interrupts land, an APPROVED
-decision should route to Publish while REJECTED/PENDING should not — that
-branching lives at the graph-topology level and won't need to change when
-the node itself gains real logic.
+Human Review's conditional edge is what enforces that an unapproved
+decision (REJECTED, or the run ending at the interrupt without ever
+resuming) never reaches Publish: only `human_approval_status ==
+ProposedChangeStatus.APPROVED` — which `human_review_node` only ever sets
+from a real resumed decision, never a default — routes to Publish. Every
+other outcome ends the run with nothing written to the production
+restaurant/menu/dish tables.
 
 Because Source Authority needs a live DB session/EntityResolutionProvider,
-Extraction needs a live DB session/StorageAdapter/Settings, and
-Multimodal Translation needs a live DB session/StorageAdapter/AIProvider,
-`build_graph` requires all of them (settings defaults to the process-wide
-`get_settings()` singleton, matching every other module; `ai_provider` has
-no safe default — there's no "null" AI provider that produces meaningful
-translation output, so a caller must supply one explicitly, same
-reasoning as `storage`) — a graph is scoped to one run's dependencies, not
-a process-wide singleton.
+Extraction needs a live DB session/StorageAdapter/Settings, Multimodal
+Translation needs a live DB session/StorageAdapter/AIProvider, and the
+graph as a whole needs a checkpointer to durably pause/resume across
+requests (see infrastructure/checkpointer.py), `build_graph` requires all
+of them — a graph is scoped to one run's dependencies plus its
+persistence backend, not a process-wide singleton.
 """
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,10 +38,10 @@ from infrastructure.storage.base import StorageAdapter
 from workflows.collector_workflow.nodes import (
     build_deterministic_validation_node,
     build_extraction_node,
+    build_human_review_node,
     build_multimodal_translation_node,
+    build_publish_node,
     build_source_authority_node,
-    human_review_node,
-    publish_node,
 )
 from workflows.collector_workflow.state import CollectorState
 
@@ -53,10 +54,12 @@ NODE_PUBLISH = "publish"
 
 
 def _route_after_human_review(state: CollectorState) -> str:
-    """Placeholder routing: until human_review_node actually sets
-    `human_approval_status`, every run ends here rather than falling
-    through to Publish — an unset/placeholder approval status must never
-    be treated as an implicit approval."""
+    """Only an explicit APPROVED decision (see nodes/human_review.py —
+    set exclusively from a resumed admin decision) routes to Publish.
+    REJECTED, an unset status (the interrupted-but-not-yet-resumed case,
+    since human_review_node's own return doesn't execute until resume),
+    and any other value all end the run instead — never an implicit
+    approval."""
     from core.schemas.proposed_change import ProposedChangeStatus
 
     if state.get("human_approval_status") == ProposedChangeStatus.APPROVED:
@@ -70,17 +73,18 @@ def build_graph(
     *,
     storage: StorageAdapter,
     ai_provider: AIProvider,
+    checkpointer: BaseCheckpointSaver,
     settings: Settings | None = None,
 ) -> CompiledStateGraph:
     """`provider` defaults to NullEntityResolutionProvider (always
     NOT_FOUND, never a false positive) so a caller that hasn't wired up a
     real entity-resolution backend yet still gets a graph that compiles
     and runs safely rather than one that requires a provider to exist.
-    `storage` and `ai_provider` have no safe default (unlike
-    provider/settings, there's no "always fails closed" storage backend
-    or "null" AI provider that produces meaningful output) so both are
-    required explicitly — a caller must consciously choose where crawl
-    captures land and which model backs translation."""
+    `storage`, `ai_provider`, and `checkpointer` have no safe default —
+    there's no "always fails closed" storage backend, "null" AI provider,
+    or in-memory-only checkpointer that would be safe to silently fall
+    back to for a workflow whose whole point is durably pausing across
+    requests — so all three are required explicitly."""
     resolved_provider = provider if provider is not None else NullEntityResolutionProvider()
     resolved_settings = settings if settings is not None else get_settings()
 
@@ -94,8 +98,8 @@ def build_graph(
         NODE_MULTIMODAL_TRANSLATION, build_multimodal_translation_node(session, storage, ai_provider)
     )
     graph.add_node(NODE_DETERMINISTIC_VALIDATION, build_deterministic_validation_node(session))
-    graph.add_node(NODE_HUMAN_REVIEW, human_review_node)
-    graph.add_node(NODE_PUBLISH, publish_node)
+    graph.add_node(NODE_HUMAN_REVIEW, build_human_review_node(session))
+    graph.add_node(NODE_PUBLISH, build_publish_node(session))
 
     graph.add_edge(START, NODE_SOURCE_AUTHORITY)
     graph.add_edge(NODE_SOURCE_AUTHORITY, NODE_EXTRACTION)
@@ -107,4 +111,4 @@ def build_graph(
     )
     graph.add_edge(NODE_PUBLISH, END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)

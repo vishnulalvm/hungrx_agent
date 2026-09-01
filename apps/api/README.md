@@ -10,11 +10,17 @@ module-level `app`).
   - `v1/auth/router.py` — `POST /login`, `POST /refresh`, `POST /logout`,
     `POST /logout-all`, `GET /me`. All security events (login
     success/failure, logout, logout-all, refresh) are audit-logged.
-  - `v1/admin/router.py` — restaurant/review/ingestion endpoints
-    (currently placeholders returning canned responses, but already
-    wired to permission checks and audit logging so the pattern is set
-    for when real logic lands) plus `GET /audit-log`
-    (`Permission.AUDIT_LOG_READ`) and `GET /users` (placeholder).
+  - `v1/admin/router.py` — restaurant/ingestion endpoints are still
+    placeholders (canned responses, but already wired to permission
+    checks and audit logging so the pattern is set for when real logic
+    lands); the review queue is **fully implemented**: `GET /reviews`
+    (pending list), `GET /reviews/{id}` (detail), `POST
+    /reviews/{id}/approve`, `POST /reviews/{id}/reject`, `POST
+    /reviews/{id}/edit-approve` — see
+    `workflows/collector_workflow/README.md`'s Human Review/Publish
+    section for the full pause/resume mechanics these endpoints drive.
+    Also `GET /audit-log` (`Permission.AUDIT_LOG_READ`) and `GET /users`
+    (placeholder).
   - `v1/agents/router.py` — will expose collector/reviewer workflow
     triggers; currently just a ping.
   - `v1/mobile/router.py` — placeholder surface for the mobile client.
@@ -30,9 +36,22 @@ module-level `app`).
     `infrastructure/source_authority/README.md`; this is the
     orchestration layer, the actual validation/normalization logic lives
     in `infrastructure/source_authority/`.
+  - `review_service.py` — `ReviewService`: business logic behind the
+    review-queue endpoints. `approve`/`reject`/`edit_then_approve` all
+    write an `Approval` row and an audit row *first* (in the same
+    request/transaction, so the API response is consistent even before
+    the graph finishes resuming), then resume the paused collector run
+    via `graph.ainvoke(Command(resume=decision), config={"configurable":
+    {"thread_id": proposed_change.thread_id}})`. Every action re-checks
+    the `ProposedChange` is still `PENDING` first (`409 Conflict`
+    otherwise) so a double-submit can't resume the same paused run
+    twice. Builds its own checkpointer/graph per call via
+    `infrastructure/checkpointer.py` and
+    `workflows/collector_workflow/dependencies.py`'s process defaults.
 - `app/dependencies/` — FastAPI `Depends` wiring: `db.py` (session per
   request), `auth.py` (`CurrentUserDep`, `require_permission(...)`),
-  `audit.py` (`AuditServiceDep`), `pagination.py`, `settings.py`.
+  `audit.py` (`AuditServiceDep`), `review.py` (`ReviewServiceDep`),
+  `pagination.py`, `settings.py`.
 - `app/core/security.py` — password hashing (bcrypt, called directly
   rather than through passlib — passlib's bcrypt backend detection is
   broken against bcrypt>=4.1), JWT issuance/verification, refresh-token

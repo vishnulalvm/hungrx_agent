@@ -34,12 +34,21 @@ class TestViewerPermissions:
         assert response.status_code == 403
         assert response.json()["error"]["code"] == "forbidden"
 
-    async def test_viewer_cannot_confirm_review_item(
+    async def test_viewer_can_read_pending_reviews(
+        self, app_client: AsyncClient, viewer_user: User, user_password: str
+    ) -> None:
+        token = await _token_for(app_client, viewer_user, user_password)
+        response = await app_client.get("/api/v1/admin/reviews", headers=auth_headers(token))
+        assert response.status_code == 200
+
+    async def test_viewer_cannot_approve_review_item(
         self, app_client: AsyncClient, viewer_user: User, user_password: str
     ) -> None:
         token = await _token_for(app_client, viewer_user, user_password)
         response = await app_client.post(
-            "/api/v1/admin/review/item-1/confirm", headers=auth_headers(token)
+            "/api/v1/admin/reviews/00000000-0000-0000-0000-000000000000/approve",
+            json={},
+            headers=auth_headers(token),
         )
         assert response.status_code == 403
 
@@ -70,14 +79,19 @@ class TestReviewerPermissions:
         response = await app_client.get("/api/v1/admin/restaurants", headers=auth_headers(token))
         assert response.status_code == 200
 
-    async def test_reviewer_can_confirm_review_item(
+    async def test_reviewer_can_attempt_to_approve_review_item(
         self, app_client: AsyncClient, reviewer_user: User, user_password: str
     ) -> None:
+        # Permission granted -> passes the require_permission gate and
+        # reaches the handler; a nonexistent id then 404s rather than
+        # 403ing, proving REVIEW_WRITE was actually checked and passed.
         token = await _token_for(app_client, reviewer_user, user_password)
         response = await app_client.post(
-            "/api/v1/admin/review/item-1/confirm", headers=auth_headers(token)
+            "/api/v1/admin/reviews/00000000-0000-0000-0000-000000000000/approve",
+            json={},
+            headers=auth_headers(token),
         )
-        assert response.status_code == 200
+        assert response.status_code == 404
 
     async def test_reviewer_cannot_create_restaurant(
         self, app_client: AsyncClient, reviewer_user: User, user_password: str
@@ -122,14 +136,16 @@ class TestDataManagerPermissions:
         )
         assert response.status_code == 200
 
-    async def test_data_manager_can_confirm_review_item(
+    async def test_data_manager_can_attempt_to_approve_review_item(
         self, app_client: AsyncClient, data_manager_user: User, user_password: str
     ) -> None:
         token = await _token_for(app_client, data_manager_user, user_password)
         response = await app_client.post(
-            "/api/v1/admin/review/item-1/confirm", headers=auth_headers(token)
+            "/api/v1/admin/reviews/00000000-0000-0000-0000-000000000000/approve",
+            json={},
+            headers=auth_headers(token),
         )
-        assert response.status_code == 200
+        assert response.status_code == 404
 
     async def test_data_manager_cannot_list_users(
         self, app_client: AsyncClient, data_manager_user: User, user_password: str
@@ -165,14 +181,16 @@ class TestSuperAdminPermissions:
         )
         assert response.status_code == 200
 
-    async def test_super_admin_can_confirm_review_item(
+    async def test_super_admin_can_attempt_to_approve_review_item(
         self, app_client: AsyncClient, super_admin_user: User, user_password: str
     ) -> None:
         token = await _token_for(app_client, super_admin_user, user_password)
         response = await app_client.post(
-            "/api/v1/admin/review/item-1/confirm", headers=auth_headers(token)
+            "/api/v1/admin/reviews/00000000-0000-0000-0000-000000000000/approve",
+            json={},
+            headers=auth_headers(token),
         )
-        assert response.status_code == 200
+        assert response.status_code == 404
 
 
 class TestUnauthenticatedAccess:
@@ -180,7 +198,8 @@ class TestUnauthenticatedAccess:
         for method, path in [
             ("GET", "/api/v1/admin/restaurants"),
             ("POST", "/api/v1/admin/restaurants"),
-            ("POST", "/api/v1/admin/review/item-1/confirm"),
+            ("GET", "/api/v1/admin/reviews"),
+            ("POST", "/api/v1/admin/reviews/00000000-0000-0000-0000-000000000000/approve"),
             ("POST", "/api/v1/admin/ingestion/trigger"),
             ("GET", "/api/v1/admin/users"),
         ]:

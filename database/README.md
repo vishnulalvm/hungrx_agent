@@ -6,10 +6,7 @@ migrations. This is the persistence layer — business logic belongs in
 
 ## database/models/
 
-ORM models, one file per table. Only a subset of `core/schemas/` are
-currently persisted (the rest — Restaurant, Menu, Dish, etc. — don't have
-tables yet; they exist as Pydantic schemas only, pending the
-extraction/publish agents that will need them).
+ORM models, one file per table.
 
 - `base.py` — `Base` declarative base.
 - `user.py`, `refresh_token.py` — auth (see `apps/api/README.md`).
@@ -17,13 +14,30 @@ extraction/publish agents that will need them).
   (FK users.id, nullable, ON DELETE SET NULL), actor_email
   (denormalized), old_values/new_values/metadata_ (JSONB), agent_run_id
   (plain string, not FK), created_at.
-- `source.py` — `Source`: restaurant_id (plain UUID, not FK — no
-  restaurants table yet), source_type, url, is_verified_domain,
-  created_at.
+- `source.py` — `Source`: restaurant_id (plain UUID, not FK), source_type,
+  url, is_verified_domain, created_at.
 - `agent_run.py` — `AgentRun`: id, workflow_type, restaurant_id
   (nullable), status, started_at, completed_at, error_message,
   created_at. Represents one run of a LangGraph workflow (e.g. one
   collector-workflow invocation for one restaurant).
+- `restaurant.py` — the production tables: `Restaurant`,
+  `RestaurantLocation`, `Menu`, `MenuCategory` (self-referential via
+  `parent_id`, mirroring `core.schemas.menu.MenuCategory`'s recursive
+  `children`), `Dish` (nutrition/allergens/ingredients stored as JSONB
+  whole units, not further normalized — they're always read/written as a
+  unit via `core.schemas.nutrition.Nutrition`, never queried by
+  individual nutrient). **Written only by**
+  `database/repositories/restaurant_repository.py`, which is imported
+  nowhere except `workflows/collector_workflow/nodes/publish.py` — see
+  that module and the root `CLAUDE.md` for why that's load-bearing for
+  "unapproved data never reaches production tables."
+- `proposed_change.py` — `ProposedChange` (the review-queue record: the
+  full proposed `Restaurant` tree as JSONB plus the deterministic
+  validation result, `status`, `thread_id` — the LangGraph checkpoint
+  thread this record's paused run lives under, required to resume it)
+  and `Approval` (one decision record per approve/reject, kept separate
+  from `ProposedChange.status` so history survives even if a change is
+  later re-reviewed).
 
 All models are re-exported from `database/models/__init__.py`.
 
@@ -40,6 +54,17 @@ transaction boundaries.
   `error_message` to 2000 chars).
 - `source_repository.py` — `create`, `get_by_id`,
   `get_verified_website_for_restaurant`, `list_for_restaurant`.
+- `restaurant_repository.py` — `RestaurantRepository.persist_tree(restaurant)`:
+  the **only** writer for the production tables (see `restaurant.py`
+  above) — recursively inserts a full `Restaurant` → locations/menus →
+  categories (arbitrary depth) → dishes tree in one call. Never imported
+  outside `workflows/collector_workflow/nodes/publish.py`.
+- `proposed_change_repository.py` — `ProposedChangeRepository` (`create`,
+  `get_by_id`, `get_by_thread_id` — the idempotency guard
+  `workflows/collector_workflow/nodes/human_review.py` uses so a
+  LangGraph resume never creates a duplicate row, `list_pending`,
+  `update_status`) and `ApprovalRepository` (`create`,
+  `list_for_proposed_change`).
 - `user_repository.py`, `refresh_token_repository.py` — auth data access.
 
 ## database/migrations/

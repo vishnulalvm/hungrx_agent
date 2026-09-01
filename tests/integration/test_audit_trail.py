@@ -135,17 +135,12 @@ class TestAdminMutationAudit:
         assert entry.action == AuditAction.RESTAURANT_CREATE
         assert entry.actor_id == data_manager_user.id
 
-    async def test_confirm_review_item_writes_audit_row(
-        self, app_client: AsyncClient, db_session, reviewer_user: User, user_password: str
-    ) -> None:
-        tokens = await login(app_client, email=reviewer_user.email, password=user_password)
-        response = await app_client.post(
-            "/api/v1/admin/review/item-42/confirm", headers=auth_headers(tokens["access_token"])
-        )
-        assert response.status_code == 200
-
-        actions = await _actions_for(db_session, AuditEntityType.PROPOSED_CHANGE, "item-42")
-        assert AuditAction.PROPOSED_CHANGE_APPROVE in actions
+    # Review-queue audit coverage (approve/reject/edit-approve all write
+    # PROPOSED_CHANGE_* audit rows) lives in
+    # tests/integration/test_human_in_the_loop.py, since exercising those
+    # endpoints for real requires a live paused collector run (a
+    # ProposedChange with a resumable thread_id), not just a bare
+    # permission-tier check like the other endpoints in this file.
 
     async def test_trigger_ingestion_writes_audit_row(
         self, app_client: AsyncClient, db_session, data_manager_user: User, user_password: str

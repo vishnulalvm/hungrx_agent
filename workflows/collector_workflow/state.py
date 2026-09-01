@@ -90,9 +90,20 @@ class CollectorState(TypedDict, total=False):
     # Deterministic Validation output
     validation_result: ValidationResult
 
-    # Human Review output
+    # Human Review — identity of the ProposedChange DB row (set once the
+    # node has created or found it; see nodes/human_review.py for why
+    # lookup is by thread_id, not by a value carried on state) and the
+    # approval outcome that decides whether the run proceeds to Publish.
+    # The admin decision itself flows through LangGraph's interrupt()
+    # return value, not a separate state field.
+    proposed_change_id: str
     proposed_changes: Annotated[list[ProposedChange], _keep_last]
     human_approval_status: ProposedChangeStatus
+
+    # Publish output — set only on a real, successful production write
+    # (see nodes/publish.py); its mere presence on a finished run's state
+    # is itself evidence the data passed human review and was written.
+    published_restaurant_id: str
 
     # Accumulates across every node — later nodes append, never overwrite,
     # so a failure downstream doesn't erase what an earlier node reported.

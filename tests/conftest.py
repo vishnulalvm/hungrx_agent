@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -21,6 +22,7 @@ from apps.api.app.core.security import hash_password
 from core.schemas.auth import Role
 from database.models.base import Base
 from database.models.user import User
+from infrastructure.checkpointer import _to_psycopg_dsn
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -75,6 +77,30 @@ async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     await session.close()
     await transaction.rollback()
     await connection.close()
+
+
+@pytest_asyncio.fixture
+async def checkpointer() -> AsyncIterator[AsyncPostgresSaver]:
+    """A real Postgres-backed checkpointer against TEST_DATABASE_URL —
+    needed for anything exercising the collector workflow's human-review
+    interrupt/resume (see workflows/collector_workflow/nodes/
+    human_review.py), since that's the whole reason a durable checkpointer
+    exists at all; an in-memory one wouldn't exercise the same
+    cross-connection persistence a real API request/resume pair relies on.
+
+    This connection is intentionally separate from `db_session`'s
+    savepoint-rolled-back transaction — the checkpointer writes through
+    its own psycopg connection, so checkpoint rows are NOT rolled back
+    automatically. `checkpoint_ns`-scoped `delete_thread` calls after each
+    test that used a distinguishable thread_id keep this from
+    accumulating, but the safest pattern (used throughout the collector
+    workflow tests) is to always use a fresh, random thread_id per test
+    rather than relying on cleanup ordering.
+    """
+    dsn = _to_psycopg_dsn(TEST_DATABASE_URL)
+    async with AsyncPostgresSaver.from_conn_string(dsn) as saver:
+        await saver.setup()
+        yield saver
 
 
 @pytest_asyncio.fixture

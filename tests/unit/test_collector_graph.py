@@ -8,13 +8,18 @@ Source Authority's own behavior (verified/rejected/needs-review paths,
 AgentRun/Source persistence, audit logging, never-hallucinate guarantee)
 is covered in tests/unit/test_source_authority_node.py; Extraction's own
 behavior (page discovery, snapshot persistence, HTML/PDF handling) is
-covered in tests/unit/test_extraction_node.py. This file only covers the
-graph's shape and control flow, so a `storage` adapter is required but
-Extraction never actually runs a real fetch in these tests — every
-end-to-end run here starts with no `restaurant` on state, so
-source_authority fails closed before extraction is ever reached."""
+covered in tests/unit/test_extraction_node.py; Human Review's actual
+pause/resume behavior (the interrupt itself, idempotent record creation,
+approve/reject/edit_then_approve) is covered in
+tests/unit/test_human_review_node.py and
+tests/integration/test_human_in_the_loop.py, which use the real
+Postgres-backed checkpointer since that's the whole point of what they
+test. This file only covers the graph's shape and control flow, so an
+in-memory checkpointer (MemorySaver) is enough — nothing here actually
+needs a durable pause."""
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
 from core.schemas.proposed_change import ProposedChangeStatus
 from infrastructure.ai.provider import AIProvider
@@ -52,30 +57,45 @@ def ai_provider():
     return _UnusedAIProvider()
 
 
+@pytest.fixture
+def checkpointer():
+    return InMemorySaver()
+
+
+def _build(db_session, storage, ai_provider, checkpointer, provider=None):
+    return build_graph(
+        db_session, provider, storage=storage, ai_provider=ai_provider, checkpointer=checkpointer
+    )
+
+
 class TestGraphCompiles:
-    def test_build_graph_returns_a_compiled_graph(self, db_session, storage, ai_provider) -> None:
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
+    def test_build_graph_returns_a_compiled_graph(self, db_session, storage, ai_provider, checkpointer) -> None:
+        graph = _build(db_session, storage, ai_provider, checkpointer)
         assert graph is not None
 
-    def test_build_graph_defaults_to_null_provider(self, db_session, storage, ai_provider) -> None:
+    def test_build_graph_defaults_to_null_provider(self, db_session, storage, ai_provider, checkpointer) -> None:
         # No explicit provider given — must not raise, and must not
         # require a real external API to be configured.
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
+        graph = _build(db_session, storage, ai_provider, checkpointer)
         assert graph is not None
 
-    def test_build_graph_accepts_an_explicit_provider(self, db_session, storage, ai_provider) -> None:
-        graph = build_graph(db_session, NullEntityResolutionProvider(), storage=storage, ai_provider=ai_provider)
+    def test_build_graph_accepts_an_explicit_provider(self, db_session, storage, ai_provider, checkpointer) -> None:
+        graph = _build(db_session, storage, ai_provider, checkpointer, provider=NullEntityResolutionProvider())
         assert graph is not None
 
-    def test_returns_a_fresh_instance_each_call(self, db_session, storage, ai_provider) -> None:
-        first = build_graph(db_session, storage=storage, ai_provider=ai_provider)
-        second = build_graph(db_session, storage=storage, ai_provider=ai_provider)
+    def test_returns_a_fresh_instance_each_call(self, db_session, storage, ai_provider, checkpointer) -> None:
+        first = _build(db_session, storage, ai_provider, checkpointer)
+        second = _build(db_session, storage, ai_provider, checkpointer)
         assert first is not second
+
+    def test_requires_a_checkpointer(self, db_session, storage, ai_provider) -> None:
+        with pytest.raises(TypeError):
+            build_graph(db_session, storage=storage, ai_provider=ai_provider)
 
 
 class TestGraphTopology:
-    def test_contains_all_six_required_nodes(self, db_session, storage, ai_provider) -> None:
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
+    def test_contains_all_six_required_nodes(self, db_session, storage, ai_provider, checkpointer) -> None:
+        graph = _build(db_session, storage, ai_provider, checkpointer)
         nodes = set(graph.get_graph().nodes.keys())
         expected = {
             NODE_SOURCE_AUTHORITY,
@@ -87,51 +107,66 @@ class TestGraphTopology:
         }
         assert expected.issubset(nodes)
 
-    def test_linear_edges_up_to_human_review(self, db_session, storage, ai_provider) -> None:
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
+    def test_linear_edges_up_to_human_review(self, db_session, storage, ai_provider, checkpointer) -> None:
+        graph = _build(db_session, storage, ai_provider, checkpointer)
         edges = {(edge.source, edge.target) for edge in graph.get_graph().edges}
         assert (NODE_SOURCE_AUTHORITY, NODE_EXTRACTION) in edges
         assert (NODE_EXTRACTION, NODE_MULTIMODAL_TRANSLATION) in edges
         assert (NODE_MULTIMODAL_TRANSLATION, NODE_DETERMINISTIC_VALIDATION) in edges
         assert (NODE_DETERMINISTIC_VALIDATION, NODE_HUMAN_REVIEW) in edges
 
-    def test_human_review_has_conditional_routes_to_publish_and_end(self, db_session, storage, ai_provider) -> None:
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
+    def test_human_review_has_conditional_routes_to_publish_and_end(
+        self, db_session, storage, ai_provider, checkpointer
+    ) -> None:
+        graph = _build(db_session, storage, ai_provider, checkpointer)
         edges = {(edge.source, edge.target) for edge in graph.get_graph().edges}
         assert (NODE_HUMAN_REVIEW, NODE_PUBLISH) in edges
         assert (NODE_HUMAN_REVIEW, "__end__") in edges
 
-    def test_publish_leads_to_end(self, db_session, storage, ai_provider) -> None:
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
+    def test_publish_leads_to_end(self, db_session, storage, ai_provider, checkpointer) -> None:
+        graph = _build(db_session, storage, ai_provider, checkpointer)
         edges = {(edge.source, edge.target) for edge in graph.get_graph().edges}
         assert (NODE_PUBLISH, "__end__") in edges
 
 
 @pytest.mark.asyncio
 class TestGraphExecutesEndToEnd:
-    async def test_run_reaches_end_without_raising(self, db_session, storage, ai_provider) -> None:
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
-        result = await graph.ainvoke({"restaurant": None})
+    """Every run here starts with no `restaurant` on state, so
+    source_authority fails closed immediately — the run never reaches
+    the human_review interrupt, so a plain ainvoke (no resume) is enough
+    and every node still reports its own placeholder/fail-closed error."""
+
+    async def test_run_reaches_end_without_raising(self, db_session, storage, ai_provider, checkpointer) -> None:
+        graph = _build(db_session, storage, ai_provider, checkpointer)
+        config = {"configurable": {"thread_id": "topology-test-1"}}
+        result = await graph.ainvoke({"restaurant": None}, config)
         assert "agent_run_id" not in result or result.get("agent_run_id") is None or isinstance(
             result.get("agent_run_id"), str
         )
 
-    async def test_missing_restaurant_reports_a_source_authority_error(self, db_session, storage, ai_provider) -> None:
+    async def test_missing_restaurant_reports_a_source_authority_error(
+        self, db_session, storage, ai_provider, checkpointer
+    ) -> None:
         # No `restaurant` in the initial state at all — source_authority
         # must fail closed (an error, no fabricated source_url) rather
         # than raise an unhandled exception that would crash the run.
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
-        result = await graph.ainvoke({})
+        graph = _build(db_session, storage, ai_provider, checkpointer)
+        config = {"configurable": {"thread_id": "topology-test-2"}}
+        result = await graph.ainvoke({}, config)
         reporting_nodes = {error["node"] for error in result["errors"]}
         assert NODE_SOURCE_AUTHORITY in reporting_nodes
         assert "source_url" not in result
 
-    async def test_downstream_placeholder_nodes_still_report_errors(self, db_session, storage, ai_provider) -> None:
+    async def test_downstream_placeholder_nodes_still_report_errors(
+        self, db_session, storage, ai_provider, checkpointer
+    ) -> None:
         # source_authority fails closed (no restaurant on state), so
-        # extraction also fails closed (no source_url) — both report an
-        # error, same as the remaining placeholder nodes.
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
-        result = await graph.ainvoke({})
+        # every downstream node also fails closed on missing input,
+        # human_review included (it never reaches its interrupt() call
+        # since structured_json/agent_run_id are never populated).
+        graph = _build(db_session, storage, ai_provider, checkpointer)
+        config = {"configurable": {"thread_id": "topology-test-3"}}
+        result = await graph.ainvoke({}, config)
         reporting_nodes = {error["node"] for error in result["errors"]}
         assert reporting_nodes == {
             NODE_SOURCE_AUTHORITY,
@@ -141,9 +176,12 @@ class TestGraphExecutesEndToEnd:
             NODE_HUMAN_REVIEW,
         }
 
-    async def test_publish_does_not_run_when_approval_status_is_unset(self, db_session, storage, ai_provider) -> None:
-        graph = build_graph(db_session, storage=storage, ai_provider=ai_provider)
-        result = await graph.ainvoke({})
+    async def test_publish_does_not_run_when_approval_status_is_unset(
+        self, db_session, storage, ai_provider, checkpointer
+    ) -> None:
+        graph = _build(db_session, storage, ai_provider, checkpointer)
+        config = {"configurable": {"thread_id": "topology-test-4"}}
+        result = await graph.ainvoke({}, config)
         publish_ran = any(error["node"] == NODE_PUBLISH for error in result["errors"])
         assert not publish_ran
 

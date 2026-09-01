@@ -58,6 +58,7 @@ class Settings(BaseSettings):
 
     # --- Storage ---
     storage_backend: str = "local"
+    storage_local_base_dir: str = "/tmp/hungrx-storage"
     storage_bucket: str = ""
     storage_access_key: str = ""
     storage_secret_key: str = ""

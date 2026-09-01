@@ -8,21 +8,33 @@ matters (naming collision with the real `langgraph` library).
 ## Files
 
 - `state.py` — `CollectorState(TypedDict, total=False)`: the shared state
-  every node reads/writes. Key fields: `agent_run_id`, `restaurant`,
-  `source_url`, `source`, `source_snapshot`, `extraction_result`,
-  `structured_json`, `validation_result`, `proposed_changes` (uses a
-  `_keep_last` reducer — replaced, not accumulated), `errors` (uses
-  `operator.add` — accumulated across nodes), `human_approval_status`.
+  every node reads/writes. Key fields: `agent_run_id` (also doubles as
+  the LangGraph checkpoint `thread_id` — see human_review below),
+  `restaurant`, `source_url`, `source`, `source_snapshot`,
+  `extraction_result`, `structured_json`, `validation_result`,
+  `proposed_change_id`, `proposed_changes` (uses a `_keep_last` reducer —
+  replaced, not accumulated), `human_approval_status`,
+  `published_restaurant_id`, `errors` (uses `operator.add` — accumulated
+  across nodes).
 - `graph.py` — `build_graph(session: AsyncSession, provider:
   EntityResolutionProvider | None = None, *, storage: StorageAdapter,
-  ai_provider: AIProvider, settings: Settings | None = None) ->
-  CompiledStateGraph`. Builds a fresh graph scoped to one DB
-  session/provider/storage/AI-provider — **not** a process-wide
-  singleton, because Source Authority needs a live session, Extraction
-  needs live storage, and Multimodal Translation needs a live AI
-  provider. Defines the linear pipeline with a conditional branch after
-  `human_review` (only `ProposedChangeStatus.APPROVED` routes to
-  `publish`; anything else, including an unset status, ends the run).
+  ai_provider: AIProvider, checkpointer: BaseCheckpointSaver, settings:
+  Settings | None = None) -> CompiledStateGraph`. Builds a fresh graph
+  scoped to one DB session/provider/storage/AI-provider/checkpointer —
+  **not** a process-wide singleton. `storage`, `ai_provider`, and
+  `checkpointer` all have no safe default and must be passed explicitly
+  (see the docstring for why). Defines the linear pipeline with a
+  conditional branch after `human_review` (only
+  `ProposedChangeStatus.APPROVED` routes to `publish`; anything else,
+  including an unset status — which includes the paused/interrupted
+  case — ends the run).
+- `dependencies.py` — `default_storage_adapter`/`default_ai_provider`:
+  the process-default `storage`/`ai_provider` instances used by callers
+  (like `ReviewService`) that need a compiled graph without already
+  having their own crawl-job-scoped instances. `default_ai_provider`
+  returns a `_LazyOpenAIProvider` that defers API-key validation until
+  actually called, since resuming a paused `human_review` never
+  re-reaches `multimodal_translation`.
 - `nodes/` — one file per pipeline stage.
 - `tools/` — currently empty; reserved for LangChain tool wrappers a node
   might need (e.g. an extraction tool).
@@ -153,17 +165,83 @@ matters (naming collision with the real `langgraph` library).
      invalid results — same audit-on-failure pattern as the earlier
      nodes. A valid result with zero corrections writes nothing (no
      audit noise for the common "everything's fine" case).
-5. **human_review** (`nodes/human_review.py`) — placeholder. Will surface
-   `proposed_changes` for a human to approve/reject, setting
-   `human_approval_status`. The conditional routing in `graph.py` already
-   depends on this field even though the node itself doesn't set it yet.
-6. **publish** (`nodes/publish.py`) — placeholder. Only reachable when
-   `human_approval_status == ProposedChangeStatus.APPROVED`.
+5. **human_review** (`nodes/human_review.py`) — **fully implemented**,
+   the graph's human-in-the-loop pause point. Given
+   `state["structured_json"]`/`state["validation_result"]`/
+   `state["agent_run_id"]` from Deterministic Validation,
+   `build_human_review_node(session)`:
+   - Looks up an existing `ProposedChange` by `thread_id` (==
+     `agent_run_id`); creates one (status `PENDING`, audited as
+     `PROPOSED_CHANGE_CREATE`) only if none exists yet. This lookup — not
+     anything carried on `state` — is what makes creation idempotent
+     across LangGraph's node-replay-on-resume behavior; see the module
+     docstring for the exact bug a naive state-based check would hit.
+   - Calls `interrupt(review_task)`. On first entry this suspends the
+     entire graph run — the surrounding `graph.ainvoke`/`astream` call
+     returns immediately with an `__interrupt__` entry instead of a
+     completed result, and nothing past this point in the pipeline
+     executes. On a resumed invocation (via
+     `graph.ainvoke(Command(resume=decision), config)` against the same
+     `thread_id`), `interrupt()` returns `decision` directly instead of
+     pausing again.
+   - Maps `decision["action"]` (`"approve"` / `"reject"` /
+     `"edit_then_approve"`) onto `human_approval_status`, and — for
+     `edit_then_approve` — replaces `structured_json` with
+     `decision["edited_structured_json"]` before returning.
+   - Does **not** itself update the `ProposedChange` row's status or
+     write an `Approval`/decision-audit row — that happens in
+     `apps/api/app/services/review_service.py`, in the same
+     request/transaction as the admin's HTTP call, so the API response
+     reflects the decision synchronously rather than racing the resumed
+     graph.
+6. **publish** (`nodes/publish.py`) — **fully implemented**, the only
+   code in the repo permitted to write to the production
+   `restaurants`/`restaurant_locations`/`menus`/`menu_categories`/`dishes`
+   tables (`database/models/restaurant.py`, via
+   `database/repositories/restaurant_repository.py`, which is imported
+   nowhere else). `build_publish_node(session)`:
+   - Re-checks `state["human_approval_status"] ==
+     ProposedChangeStatus.APPROVED` itself — defense in depth against a
+     graph-routing bug, even though topology already only routes here on
+     APPROVED — and refuses to write (returns an error instead) if it
+     somehow wasn't.
+   - Parses `state["structured_json"]` back into a `Restaurant` and calls
+     `RestaurantRepository.persist_tree(...)`, which recursively inserts
+     the restaurant, its locations, menus, the (possibly deeply nested)
+     category tree, and every dish.
+   - Marks the `ProposedChange` `PUBLISHED`, writes a
+     `PROPOSED_CHANGE_PUBLISH` audit row, and marks the `AgentRun`
+     `SUCCEEDED` — this is the one node in the pipeline that finalizes an
+     `AgentRun` as done, since it's the terminal success state of the
+     whole pipeline.
+   - Returns `published_restaurant_id` on state — its mere presence on a
+     finished run's result is itself evidence the data passed human
+     review and was actually written.
 
-Every placeholder node currently returns
-`{"errors": [{"node": "<name>", "message": "... is a placeholder — not yet implemented"}]}`
-so a full end-to-end run surfaces exactly which stages are unfinished
-rather than silently doing nothing.
+The remaining human/business-logic side of a decision — creating the
+`Approval` row, writing the `PROPOSED_CHANGE_APPROVE`/`_REJECT`/`_EDIT`
+audit rows, and actually calling `graph.ainvoke(Command(resume=...), ...)`
+— lives in `apps/api/app/services/review_service.py`, called from the
+admin API's `/reviews` endpoints
+(`apps/api/app/routers/v1/admin/router.py`):
+
+- `GET /api/v1/admin/reviews` — pending queue (`REVIEW_READ`).
+- `GET /api/v1/admin/reviews/{id}` — one review's full detail, including
+  `structured_json`/`validation_result` (`REVIEW_READ`).
+- `POST /api/v1/admin/reviews/{id}/approve` — resumes with `action:
+  "approve"` (`REVIEW_WRITE`).
+- `POST /api/v1/admin/reviews/{id}/reject` — resumes with `action:
+  "reject"` (`REVIEW_WRITE`).
+- `POST /api/v1/admin/reviews/{id}/edit-approve` — resumes with `action:
+  "edit_then_approve"` plus the reviewer's edited `structured_json`
+  (`REVIEW_WRITE`); writes a separate `PROPOSED_CHANGE_EDIT` audit row
+  before the approval one, so "a human changed this data" and "a human
+  approved it" are two distinct, individually auditable facts.
+
+Every action re-checks the `ProposedChange` is still `PENDING` before
+acting (a `409 Conflict` otherwise — see `ReviewService._require_pending`)
+so a double-submit or acting on an already-decided review can't
+double-resume the same paused graph run.
 
 ## Testing
 
@@ -203,13 +281,41 @@ rather than silently doing nothing.
   node wrapper around `core.validation.validate`: `validation_result`
   shape, `structured_json` only replaced on an actual correction,
   fail-closed on missing input, AgentRun/AuditLog bookkeeping.
+- `tests/unit/test_human_review_node.py` — Human Review's pause/resume
+  behavior against a real Postgres-backed checkpointer (the
+  `checkpointer` fixture, `tests/conftest.py` — an in-memory one
+  wouldn't prove anything about durability): the graph actually pauses
+  and returns `__interrupt__`, the interrupt payload shape, a
+  `ProposedChange` is created on pause, resume routes correctly for all
+  three decisions (approve/reject/edit_then_approve), and — the specific
+  bug this design guards against — exactly one `ProposedChange`/one
+  `PROPOSED_CHANGE_CREATE` audit row survives a full pause-then-resume
+  cycle (`TestIdempotentRecordCreation`).
+- `tests/unit/test_publish_node.py` — Publish's real production write
+  (restaurant + full menu tree including dishes), ProposedChange/
+  AgentRun/AuditLog bookkeeping, and — tested directly at the node level,
+  not just via graph routing — that it refuses to write for every
+  non-APPROVED status and for APPROVED-but-missing-data states.
+- `tests/integration/test_human_in_the_loop.py` — the full HTTP-level
+  cycle through the real FastAPI app and a real paused graph: pending
+  list, review detail, approve → publish, reject → no publish,
+  edit-then-approve → publishes the *edited* data, permission checks per
+  endpoint, double-decision → `409`, and an explicit "a review nobody
+  acts on writes nothing to production tables" check. Overrides
+  `get_settings` (not just `get_db_session`) so `ReviewService`'s
+  checkpointer/graph resolve against `TEST_DATABASE_URL` rather than the
+  dev database — see the file's module docstring.
 
 All of these use the real Postgres-backed `db_session` fixture from
 `tests/conftest.py` — `build_graph`/`build_source_authority_node`/
 `build_extraction_node`/`build_multimodal_translation_node`/
-`build_deterministic_validation_node` always need a real `AsyncSession`,
-there's no in-memory mode. `build_graph` also requires `storage`
-(`StorageAdapter`) and `ai_provider` (`AIProvider`) arguments (e.g.
-`LocalStorageAdapter(tmp_path)` and a fake `AIProvider` in tests) since
-Extraction persists crawl captures and Multimodal Translation calls the
-AI provider through them; Deterministic Validation needs neither.
+`build_deterministic_validation_node`/`build_human_review_node`/
+`build_publish_node` always need a real `AsyncSession`, there's no
+in-memory mode. `build_graph` also requires `storage` (`StorageAdapter`),
+`ai_provider` (`AIProvider`), and `checkpointer` (`BaseCheckpointSaver`)
+arguments (e.g. `LocalStorageAdapter(tmp_path)`, a fake `AIProvider`, and
+either `InMemorySaver()` for topology-only tests or the real
+`checkpointer` fixture for anything touching an actual pause/resume) —
+Extraction persists crawl captures, Multimodal Translation calls the AI
+provider, and Human Review/Publish need the checkpointer to actually
+pause/resume durably; Deterministic Validation needs none of the three.

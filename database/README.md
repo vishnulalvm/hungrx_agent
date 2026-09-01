@@ -16,6 +16,14 @@ ORM models, one file per table.
   (plain string, not FK), created_at.
 - `source.py` — `Source`: restaurant_id (plain UUID, not FK), source_type,
   url, is_verified_domain, created_at.
+- `source_snapshot.py` — `SourceSnapshotRow`: durable persistence for
+  `core.schemas.source.SourceSnapshot` (source_id FK, content_type,
+  content_hash, storage_path, fetched_at, http_status,
+  content_length_bytes). The collector workflow's own `SourceSnapshot`s
+  only ever lived on in-memory LangGraph state for the duration of one
+  run; this table exists because the reviewer workflow's Temporal Hash
+  Polling node needs "what was the last recorded hash for this source"
+  answerable across separate runs, potentially days apart.
 - `agent_run.py` — `AgentRun`: id, workflow_type, restaurant_id
   (nullable), status, started_at, completed_at, error_message,
   created_at. Represents one run of a LangGraph workflow (e.g. one
@@ -54,11 +62,20 @@ transaction boundaries.
   `error_message` to 2000 chars).
 - `source_repository.py` — `create`, `get_by_id`,
   `get_verified_website_for_restaurant`, `list_for_restaurant`.
-- `restaurant_repository.py` — `RestaurantRepository.persist_tree(restaurant)`:
-  the **only** writer for the production tables (see `restaurant.py`
-  above) — recursively inserts a full `Restaurant` → locations/menus →
-  categories (arbitrary depth) → dishes tree in one call. Never imported
-  outside `workflows/collector_workflow/nodes/publish.py`.
+- `restaurant_repository.py` — `RestaurantRepository`: `persist_tree(restaurant)`
+  is the **only** insert path for the production tables (see
+  `restaurant.py` above) — recursively inserts a full `Restaurant` →
+  locations/menus → categories (arbitrary depth) → dishes tree in one
+  call; called only from `workflows/collector_workflow/nodes/publish.py`.
+  `get_full_tree(restaurant_id)` is a read-only counterpart (no such
+  restriction — reads impose none of the risk the write-path guarantee
+  protects against) used by
+  `workflows/reviewer_workflow/nodes/json_delta_generation.py` to diff a
+  fresh re-crawl against what's actually live.
+- `source_snapshot_repository.py` — `SourceSnapshotRepository`: `create`,
+  `get_latest_for_source` (what
+  `workflows/reviewer_workflow/nodes/temporal_hash_polling.py` compares
+  a fresh fetch's hash against), `list_for_source`.
 - `proposed_change_repository.py` — `ProposedChangeRepository` (`create`,
   `get_by_id`, `get_by_thread_id` — the idempotency guard
   `workflows/collector_workflow/nodes/human_review.py` uses so a

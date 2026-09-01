@@ -35,6 +35,15 @@ Admin review API (GET/POST /api/v1/admin/reviews/...) ──▶ approve / reject
       │ (resumes the paused graph via Command(resume=...))
       ▼
 ProposedChange → Approval → published Restaurant/Menu data (database/models/restaurant.py)
+
+Reviewer LangGraph workflow (workflows/reviewer_workflow) — checks an
+already-published restaurant's source for drift, on demand
+  1. temporal_hash_polling  — DONE (re-fetch + SHA-256 compare; early-stops the run when unchanged)
+  2. targeted_reextraction  — DONE (reuses collector's capture/AI-structuring path)
+  3. json_delta_generation  — DONE (DeepDiff, produces core/schemas/diff.py's JSONDelta)
+  4. delta_validation       — DONE (same core/validation/ engine, no LLM)
+  5. human_final_sync       — DONE (pauses via LangGraph interrupt(); reuses ProposedChange/Approval)
+  6. publish                — DONE (updates the existing production restaurant only on APPROVED)
 ```
 
 **Human-in-the-loop, concretely**: `human_review_node` creates a
@@ -64,7 +73,7 @@ durable audit trail (see `database/README.md`).
 | `core/schemas/` | Strict Pydantic domain schemas (Restaurant, Menu, Dish, Nutrition, Source, ProposedChange, AgentRun, audit types, auth/permissions). Source of truth for shapes. |
 | `core/config/` | Shared `Settings` (env-driven), logging setup, exception types. |
 | `core/validation/` | Deterministic (no-LLM) validation engine: schema, nutrition/Atwater, allergen taxonomy, price, required-field, duplicate, and impossible-value checks, plus safe (formatting-only) corrections. |
-| `database/models/` | SQLAlchemy ORM models (Postgres), including the production `restaurants`/`menus`/`menu_categories`/`dishes` tables (written only by `publish_node`) and the `proposed_changes`/`approvals` review-queue tables. |
+| `database/models/` | SQLAlchemy ORM models (Postgres), including the production `restaurants`/`menus`/`menu_categories`/`dishes` tables (written only by the collector/reviewer workflows' respective `publish` nodes), the `proposed_changes`/`approvals` review-queue tables, and `source_snapshots` (durable `SourceSnapshot` persistence — the reviewer workflow's Temporal Hash Polling needs "what was the hash last time" to survive across separate runs, unlike the collector workflow's in-memory-only snapshots). |
 | `database/repositories/` | Data-access layer — one repository per model, thin CRUD + query methods, no business logic. |
 | `database/migrations/` | Alembic migrations. Always autogenerate + review before applying. |
 | `infrastructure/crawler/` | httpx/Playwright fetching, domain locking, robots.txt checks, SHA-256 hashing, snapshot storage. Restricted to verified domains only. |
@@ -74,7 +83,7 @@ durable audit trail (see `database/README.md`).
 | `infrastructure/checkpointer.py` | `get_checkpointer(settings)` — the durable (Postgres-backed) LangGraph checkpointer that makes human-in-the-loop pause/resume survive across separate API requests. |
 | `infrastructure/queue/` | Redis queue adapter interface (worker job queue). |
 | `workflows/collector_workflow/` | LangGraph state machine that runs a restaurant through Source Authority → Extraction → ... → Publish. |
-| `workflows/reviewer_workflow/` | Second LangGraph workflow for review/QA — skeleton only, not yet built. |
+| `workflows/reviewer_workflow/` | LangGraph state machine that checks an already-published restaurant's source for drift (Temporal Hash Polling → ... → Human Final Sync → Publish), early-stopping when the source hash hasn't changed. Reuses the collector workflow's capture/AI-structuring path and the same ProposedChange/Approval review-queue infrastructure. |
 | `apps/api/` | FastAPI backend: auth, admin, agents, mobile routers; services (audit, auth, source authority). |
 | `apps/worker/` | Background job worker (Redis-backed) — currently a placeholder run loop. |
 | `apps/admin-dashboard/` | Next.js + TypeScript admin UI (separate frontend app). |
@@ -165,9 +174,31 @@ durable audit trail (see `database/README.md`).
   exclusively from a real resumed admin decision, never a default —
   routes to `publish_node`. (2) `publish_node` itself re-checks that
   status before writing anyway (defense in depth against a routing bug
-  elsewhere), and `RestaurantRepository` (the only code that writes
-  `restaurants`/`menus`/`menu_categories`/`dishes`) is imported nowhere
-  except that one node.
+  elsewhere), re-validates the data immediately before commit (deterministic
+  `core.validation.validate()`, refusing on any error — approval of *some*
+  version of the data is not proof the final payload still passes), and
+  `RestaurantRepository.persist_tree`/its own write path is called nowhere
+  except that one node. This holds independently for both workflows: the
+  collector workflow's `workflows/collector_workflow/nodes/publish.py`
+  (always inserts a brand-new restaurant; refuses to republish an
+  already-published `entity_id`) and the reviewer workflow's
+  `workflows/reviewer_workflow/nodes/publish.py` (always updates an
+  already-published restaurant in place; refuses if no production row
+  exists yet) are deliberately separate implementations of the same
+  guarantee, not a shared node — their write semantics (insert-only vs.
+  update-in-place) are opposite by design.
+- **The reviewer workflow's early-stop gate is graph routing, not an
+  error.** `temporal_hash_polling`'s `hash_changed == False` is a normal,
+  successful outcome (the `AgentRun` completes `SUCCEEDED`) — it's
+  `workflows/reviewer_workflow/graph.py`'s `_route_after_hash_polling`
+  conditional edge that sends the run straight to `END` rather than into
+  `targeted_reextraction`. Everything downstream of that gate (re-extraction,
+  an AI call, diffing, an interrupt) only runs when the source's SHA-256
+  hash actually differs from the last recorded `source_snapshots` row for
+  that source — see `database/repositories/source_snapshot_repository.py`,
+  which exists specifically because the collector workflow's `SourceSnapshot`s
+  never had durable persistence (in-memory LangGraph state only), and a
+  hash comparison across separate reviewer runs needs one.
 
 ## Running things
 
@@ -202,14 +233,30 @@ tested, plus the admin review API
 (`apps/api/app/routers/v1/admin/router.py`'s `/reviews` endpoints via
 `apps/api/app/services/review_service.py`).
 
-Not yet built: the reviewer workflow (entirely skeleton — QA on already-
-published data, distinct from the collector workflow's human review
-step); worker job processing (placeholder loop only — nothing currently
-triggers a collector run automatically, it has to be invoked directly).
-`build_graph()` requires `storage` (StorageAdapter), `ai_provider`
-(AIProvider), and `checkpointer` (BaseCheckpointSaver) — none has an
-unsafe silent default. `workflows/collector_workflow/dependencies.py`
-provides the process-default `storage`/`ai_provider` instances
-`ReviewService` uses when resuming a review (its `_LazyOpenAIProvider`
-defers OpenAI API-key validation until actually called, since resuming
-a paused human_review never re-reaches multimodal_translation).
+Also done: all six Reviewer Workflow agents — Temporal Hash Polling
+(SHA-256 re-check against `source_snapshots`, the early-stop gate),
+Targeted Re-Extraction (reuses the collector workflow's capture/AI path,
+mapped onto the currently published restaurant), JSON Delta Generation
+(DeepDiff-based, produces `core/schemas/diff.py`'s `JSONDelta`), Delta
+Validation (same `core/validation/` engine), Human Final Sync (reuses
+the collector workflow's `ProposedChange`/interrupt-resume review-queue
+infrastructure), and Publish (updates an already-published restaurant,
+distinct write semantics from the collector workflow's insert-only
+publish node) — see `workflows/reviewer_workflow/README.md` for the
+full node-by-node breakdown. Nothing currently triggers a reviewer run
+automatically (no scheduler/cron wired up yet) — it has to be invoked
+directly, same as the collector workflow.
+
+Not yet built: worker job processing (placeholder loop only — nothing
+currently triggers a collector or reviewer run automatically, both have
+to be invoked directly); a scheduler for periodic reviewer-workflow
+polling. `build_graph()` (both workflows) requires `storage`
+(StorageAdapter), `ai_provider` (AIProvider), and `checkpointer`
+(BaseCheckpointSaver) — none has an unsafe silent default.
+`workflows/collector_workflow/dependencies.py` provides the
+process-default `storage`/`ai_provider` instances `ReviewService` uses
+when resuming a review (its `_LazyOpenAIProvider` defers OpenAI
+API-key validation until actually called, since resuming a paused
+human_review/human_final_sync never re-reaches the AI-calling node);
+the reviewer workflow's nodes reuse these same defaults rather than
+duplicating them.

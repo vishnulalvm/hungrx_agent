@@ -5,6 +5,7 @@ from database.models.proposed_change import Approval, ProposedChange
 from database.models.refresh_token import RefreshToken
 from database.models.restaurant import Dish, Menu, MenuCategory, Restaurant, RestaurantLocation
 from database.models.source import Source
+from database.models.source_snapshot import SourceSnapshotRow
 from database.models.user import User
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "RefreshToken",
     "AuditLog",
     "Source",
+    "SourceSnapshotRow",
     "AgentRun",
     "Restaurant",
     "RestaurantLocation",

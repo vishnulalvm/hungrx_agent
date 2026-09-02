@@ -21,15 +21,41 @@ This same domain-lock logic is reused (not duplicated) by
 `infrastructure/source_authority/domain_validator.py` — if you change the
 matching rules here, check that module too.
 
+`ssrf_guard.py` — the other half of domain restriction, layered on top
+of `DomainVerifier`'s hostname allow-list: `assert_safe_host(hostname)`
+resolves the hostname and rejects it if any resolved address is
+private/loopback/link-local/reserved (RFC 1918, `169.254.169.254` cloud
+metadata, `127.0.0.1`, `::1`, etc.), and `is_ip_literal_host(hostname)`
+rejects a bare IP address as a host outright without needing DNS. A
+hostname passing `DomainVerifier` can still resolve internally — either
+because the "official" URL was an IP literal in the first place, or via
+DNS rebinding (public IP at verification time, internal one at
+connection time) — so `assert_safe_host` is checked independently at
+actual connection time in `HttpFetcher.fetch()` (every request *and*
+every followed redirect hop), not just once at domain-verification time.
+
 ## Fetching
 
 - `http_fetcher.py` — `HttpFetcher`: default fetch path, httpx-based,
-  domain-verified, robots-checked, throttled. Use this unless you
-  specifically need JS rendering.
+  domain-verified, SSRF-guarded, robots-checked, throttled. Use this
+  unless you specifically need JS rendering. `follow_redirects=False` on
+  the underlying client deliberately — redirects are followed manually,
+  one hop at a time (capped at 10), with `DomainVerifier`/`ssrf_guard`
+  re-checked before each hop is followed; httpx's own
+  `follow_redirects=True` would fetch a redirect target with zero
+  re-validation, which is exactly the gap a same-domain-verified site
+  redirecting to an internal address would exploit. Responses are capped
+  at 25MB (`Content-Length` pre-check plus a running counter while
+  streaming) against memory-exhaustion from an oversized or
+  slow-trickling response.
 - `browser_fetcher.py` — `BrowserFetcher`: Playwright-based, used only
   when a page requires JS rendering (`fetch_rendered_html`) or for
   screenshot capture (`capture_screenshot`). Not the default path —
-  browser automation is comparatively expensive.
+  browser automation is comparatively expensive. Only checks
+  `DomainVerifier` against the initial URL; Playwright follows redirects
+  internally with no per-hop domain/SSRF re-validation hook wired up
+  here (unlike `HttpFetcher`) — a known gap, not yet closed, since this
+  isn't the default fetch path.
 - `robots.py` — `RobotsChecker`: best-effort; a missing or unreachable
   `robots.txt` is treated as "allow," not "deny."
 - `fetch_result.py` — `FetchResult` dataclass: url, content_type,

@@ -26,10 +26,17 @@ class RobotsChecker:
 
         parser = urllib.robotparser.RobotFileParser()
         try:
+            # The shared client has follow_redirects=False (see
+            # http_fetcher.py — redirects are validated per-hop against
+            # the domain/SSRF guard elsewhere in that module); a
+            # redirected robots.txt is treated the same as a missing one
+            # rather than being followed or parsed as-is, since this
+            # checker has no domain/SSRF validation of its own for a
+            # redirect target.
             response = await self._client.get(self._robots_url, timeout=10.0)
-            if response.status_code >= 400:
-                # No robots.txt (or inaccessible) — treat as "allow all",
-                # matching how a browser/user would behave.
+            if response.status_code >= 400 or response.is_redirect:
+                # No robots.txt (or inaccessible/redirected) — treat as
+                # "allow all", matching how a browser/user would behave.
                 parser.parse([])
                 self._parser = parser
                 return

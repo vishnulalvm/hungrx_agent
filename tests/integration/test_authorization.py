@@ -26,14 +26,6 @@ class TestViewerPermissions:
         response = await app_client.get("/api/v1/admin/restaurants", headers=auth_headers(token))
         assert response.status_code == 200
 
-    async def test_viewer_cannot_create_restaurant(
-        self, app_client: AsyncClient, viewer_user: User, user_password: str
-    ) -> None:
-        token = await _token_for(app_client, viewer_user, user_password)
-        response = await app_client.post("/api/v1/admin/restaurants", headers=auth_headers(token))
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "forbidden"
-
     async def test_viewer_can_read_pending_reviews(
         self, app_client: AsyncClient, viewer_user: User, user_password: str
     ) -> None:
@@ -57,7 +49,9 @@ class TestViewerPermissions:
     ) -> None:
         token = await _token_for(app_client, viewer_user, user_password)
         response = await app_client.post(
-            "/api/v1/admin/ingestion/trigger", headers=auth_headers(token)
+            "/api/v1/admin/ingestion/trigger",
+            json={"name": "Joe's Pizza"},
+            headers=auth_headers(token),
         )
         assert response.status_code == 403
 
@@ -93,19 +87,14 @@ class TestReviewerPermissions:
         )
         assert response.status_code == 404
 
-    async def test_reviewer_cannot_create_restaurant(
-        self, app_client: AsyncClient, reviewer_user: User, user_password: str
-    ) -> None:
-        token = await _token_for(app_client, reviewer_user, user_password)
-        response = await app_client.post("/api/v1/admin/restaurants", headers=auth_headers(token))
-        assert response.status_code == 403
-
     async def test_reviewer_cannot_trigger_ingestion(
         self, app_client: AsyncClient, reviewer_user: User, user_password: str
     ) -> None:
         token = await _token_for(app_client, reviewer_user, user_password)
         response = await app_client.post(
-            "/api/v1/admin/ingestion/trigger", headers=auth_headers(token)
+            "/api/v1/admin/ingestion/trigger",
+            json={"name": "Joe's Pizza"},
+            headers=auth_headers(token),
         )
         assert response.status_code == 403
 
@@ -120,21 +109,17 @@ class TestReviewerPermissions:
 class TestDataManagerPermissions:
     """DATA_MANAGER: full restaurant/ingestion control, but not user mgmt."""
 
-    async def test_data_manager_can_create_restaurant(
-        self, app_client: AsyncClient, data_manager_user: User, user_password: str
-    ) -> None:
-        token = await _token_for(app_client, data_manager_user, user_password)
-        response = await app_client.post("/api/v1/admin/restaurants", headers=auth_headers(token))
-        assert response.status_code == 200
-
     async def test_data_manager_can_trigger_ingestion(
         self, app_client: AsyncClient, data_manager_user: User, user_password: str
     ) -> None:
         token = await _token_for(app_client, data_manager_user, user_password)
         response = await app_client.post(
-            "/api/v1/admin/ingestion/trigger", headers=auth_headers(token)
+            "/api/v1/admin/ingestion/trigger",
+            json={"name": "Joe's Pizza"},
+            headers=auth_headers(token),
         )
         assert response.status_code == 200
+        assert response.json()["job_id"]
 
     async def test_data_manager_can_attempt_to_approve_review_item(
         self, app_client: AsyncClient, data_manager_user: User, user_password: str
@@ -165,19 +150,14 @@ class TestSuperAdminPermissions:
         response = await app_client.get("/api/v1/admin/users", headers=auth_headers(token))
         assert response.status_code == 200
 
-    async def test_super_admin_can_create_restaurant(
-        self, app_client: AsyncClient, super_admin_user: User, user_password: str
-    ) -> None:
-        token = await _token_for(app_client, super_admin_user, user_password)
-        response = await app_client.post("/api/v1/admin/restaurants", headers=auth_headers(token))
-        assert response.status_code == 200
-
     async def test_super_admin_can_trigger_ingestion(
         self, app_client: AsyncClient, super_admin_user: User, user_password: str
     ) -> None:
         token = await _token_for(app_client, super_admin_user, user_password)
         response = await app_client.post(
-            "/api/v1/admin/ingestion/trigger", headers=auth_headers(token)
+            "/api/v1/admin/ingestion/trigger",
+            json={"name": "Joe's Pizza"},
+            headers=auth_headers(token),
         )
         assert response.status_code == 200
 
@@ -197,7 +177,6 @@ class TestUnauthenticatedAccess:
     async def test_all_protected_admin_routes_reject_no_token(self, app_client: AsyncClient) -> None:
         for method, path in [
             ("GET", "/api/v1/admin/restaurants"),
-            ("POST", "/api/v1/admin/restaurants"),
             ("GET", "/api/v1/admin/reviews"),
             ("POST", "/api/v1/admin/reviews/00000000-0000-0000-0000-000000000000/approve"),
             ("POST", "/api/v1/admin/ingestion/trigger"),

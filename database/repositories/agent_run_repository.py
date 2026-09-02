@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.schemas.agent_run import AgentRunStatus, AgentWorkflowType
@@ -27,6 +28,18 @@ class AgentRunRepository:
 
     async def get_by_id(self, run_id: uuid.UUID) -> AgentRun | None:
         return await self._session.get(AgentRun, run_id)
+
+    async def list_paginated(self, *, page: int, page_size: int) -> tuple[list[AgentRun], int]:
+        """Most-recent-first. Used by the admin dashboard's agent-run
+        status view — read-only, no business logic beyond ordering/paging."""
+        total = (await self._session.execute(select(func.count()).select_from(AgentRun))).scalar_one()
+        result = await self._session.execute(
+            select(AgentRun)
+            .order_by(AgentRun.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        return list(result.scalars().all()), total
 
     async def mark_succeeded(self, run_id: uuid.UUID) -> None:
         record = await self._session.get(AgentRun, run_id)

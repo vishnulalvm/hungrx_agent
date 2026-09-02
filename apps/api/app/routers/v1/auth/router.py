@@ -7,6 +7,7 @@ regardless of which other /api/v1/* modules it talks to afterwards.
 
 from fastapi import APIRouter, status
 
+from apps.api.app.core.rate_limit import RateLimitLoginDep, RateLimitRefreshDep
 from apps.api.app.dependencies.audit import AuditServiceDep
 from apps.api.app.dependencies.auth import CurrentUserDep
 from apps.api.app.dependencies.db import DbSessionDep
@@ -32,7 +33,11 @@ async def ping() -> dict[str, str]:
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
-    payload: LoginRequest, db: DbSessionDep, settings: SettingsDep, audit: AuditServiceDep
+    payload: LoginRequest,
+    db: DbSessionDep,
+    settings: SettingsDep,
+    audit: AuditServiceDep,
+    _rate_limit: RateLimitLoginDep,
 ) -> TokenResponse:
     service = AuthService(db, settings)
     try:
@@ -52,7 +57,11 @@ async def login(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(
-    payload: RefreshRequest, db: DbSessionDep, settings: SettingsDep, audit: AuditServiceDep
+    payload: RefreshRequest,
+    db: DbSessionDep,
+    settings: SettingsDep,
+    audit: AuditServiceDep,
+    _rate_limit: RateLimitRefreshDep,
 ) -> TokenResponse:
     service = AuthService(db, settings)
     tokens = await service.refresh(raw_refresh_token=payload.refresh_token)

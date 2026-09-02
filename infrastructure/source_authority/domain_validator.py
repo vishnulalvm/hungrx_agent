@@ -6,6 +6,7 @@ crawler will later be restricted to for this restaurant.
 from dataclasses import dataclass
 
 from infrastructure.crawler.domain_lock import DomainVerifier, extract_domain
+from infrastructure.crawler.ssrf_guard import is_ip_literal_host
 from infrastructure.source_authority.aggregator_blocklist import is_known_aggregator
 from infrastructure.source_authority.url_normalizer import InvalidUrlError, normalize_url
 
@@ -45,9 +46,21 @@ def validate_official_domain(raw_url: str) -> tuple[str, DomainLockConfig]:
 
     # Sanity-check the domain shape itself (DomainVerifier would accept
     # any non-empty hostname; this catches obviously-malformed hosts like
-    # a bare "localhost" or an IP literal slipping through as "official").
+    # a bare "localhost" slipping through as "official").
     if "." not in domain:
         raise DomainRejectedError(f"{domain!r} is not a valid public domain")
+
+    # An IP literal (e.g. "169.254.169.254", a cloud metadata address, or
+    # any other bare IP) must never be accepted as a restaurant's
+    # "official domain" — a real site is identified by hostname, and
+    # allowing an IP literal through here is exactly the gap that would
+    # let a crawl target an internal/metadata address directly (SSRF).
+    # Checked independently of DomainLock's DNS-rebinding-safe resolved-
+    # address check at actual connection time (http_fetcher.py) — this
+    # one is a syntactic, resolution-free rejection since a legitimate
+    # restaurant domain is never an IP literal in the first place.
+    if is_ip_literal_host(domain):
+        raise DomainRejectedError(f"{domain!r} is an IP address, not a valid public domain")
 
     # Round-trips through DomainVerifier to confirm the normalized URL is
     # actually self-consistent with the domain we just extracted from it.

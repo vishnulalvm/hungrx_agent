@@ -1,8 +1,15 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Values that must never be the actual JWT-signing secret in production —
+# anyone who has read this source file (i.e. everyone, since it's
+# committed) knows this default, so booting production with it
+# unchanged lets anyone forge access tokens for any role.
+_WEAK_API_SECRET_KEYS = {"change-me", ""}
+_MIN_PRODUCTION_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -70,6 +77,27 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @model_validator(mode="after")
+    def _reject_weak_secret_in_production(self) -> "Settings":
+        """Fails fast at process startup (Settings() construction, not
+        deep into a request) rather than letting a production deployment
+        silently boot with the well-known "change-me" default — or any
+        other implausibly short value — as the actual JWT signing
+        secret, which would let anyone forge access tokens (including
+        role=SUPER_ADMIN) for this app. Dev/staging/test are unaffected;
+        this is a production-only guard, not a general strength
+        requirement on api_secret_key everywhere it's used."""
+        if self.is_production and (
+            self.api_secret_key in _WEAK_API_SECRET_KEYS
+            or len(self.api_secret_key) < _MIN_PRODUCTION_SECRET_LENGTH
+        ):
+            raise ValueError(
+                "api_secret_key must be set to a strong, unique value "
+                f"(at least {_MIN_PRODUCTION_SECRET_LENGTH} characters) when "
+                "environment=production — refusing to start with a weak/default secret."
+            )
+        return self
 
 
 @lru_cache

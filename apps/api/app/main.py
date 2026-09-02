@@ -31,6 +31,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     settings = get_settings()
 
+    # allow_credentials=True combined with a "*" origin lets any site's
+    # credentialed (cookie/Authorization-bearing) request through once
+    # reflected — browsers themselves refuse to actually honor "*" with
+    # credentials, so this isn't independently exploitable against a
+    # spec-compliant browser, but it's a real misconfiguration risk
+    # (CORS_ORIGINS=* silently becomes allow-any-origin-with-credentials
+    # rather than erroring) worth refusing to boot with in production the
+    # same way the weak-secret-key guard does — see
+    # Settings._reject_weak_secret_in_production.
+    if settings.is_production and "*" in settings.cors_origins_list:
+        raise RuntimeError(
+            "CORS_ORIGINS must not be '*' when environment=production and "
+            "credentials are allowed — set explicit allowed origins instead."
+        )
+
     app = FastAPI(
         title="hungrX API",
         version="0.1.0",

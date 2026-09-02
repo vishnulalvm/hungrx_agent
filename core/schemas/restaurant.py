@@ -67,3 +67,19 @@ class Restaurant(BaseModel):
         if not stripped:
             raise ValueError("Restaurant name cannot be blank")
         return stripped
+
+
+class RestaurantSummary(BaseModel):
+    """One row of the admin dashboard's restaurant list — deliberately
+    lighter than the full Restaurant tree (no menus/dishes) since a list
+    view never needs them; RestaurantRepository.get_full_tree is still
+    the one used for a single restaurant's detail page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    name: str
+    is_active: bool
+    city: str | None = None
+    menu_item_count: int
+    created_at: datetime | None = None

@@ -16,6 +16,8 @@ Normalization applied:
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from infrastructure.crawler.ssrf_guard import is_ip_literal_host
+
 _TRACKING_PARAM_PREFIXES = ("utm_",)
 _TRACKING_PARAMS = frozenset({"gclid", "fbclid", "msclkid"})
 
@@ -49,6 +51,16 @@ def normalize_url(raw_url: str) -> str:
         raise InvalidUrlError(f"Unsupported URL scheme: {parsed.scheme!r}")
 
     host = parsed.hostname.lower()
+    # Rejected here (before netloc reassembly, which would otherwise
+    # silently drop an IPv6 literal's brackets and produce a
+    # malformed/unparseable URL) rather than only at
+    # domain_validator.py's IP-literal check downstream — a bare IP is
+    # never a legitimate "official restaurant domain" either way, so
+    # there's no case where normalize_url legitimately needs to succeed
+    # on one.
+    if is_ip_literal_host(host):
+        raise InvalidUrlError(f"IP address literals are not accepted as a URL host: {host!r}")
+
     default_port = 443 if parsed.scheme == "https" else 80
     netloc = host if parsed.port in (None, default_port) else f"{host}:{parsed.port}"
 

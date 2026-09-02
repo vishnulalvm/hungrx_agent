@@ -9,6 +9,18 @@ state into each other regardless of execution order.
 """
 
 import os
+
+# Set before any app import below (Settings() is lru_cache'd via
+# get_settings() — this must land before the first call, anywhere,
+# during test collection/fixture setup) so apps.api.app.core.rate_limit's
+# login/refresh rate limiter — otherwise correctly throttling — doesn't
+# also throttle the test suite's own rapid-fire login calls, which all
+# share one "IP" through the ASGI test transport. Assigned unconditionally
+# (not setdefault) since the dev container sets ENVIRONMENT=development
+# as a real process env var — the test run always overrides it to "test"
+# regardless of what the container itself was started with.
+os.environ["ENVIRONMENT"] = "test"
+
 import uuid
 from collections.abc import AsyncIterator
 

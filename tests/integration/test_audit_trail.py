@@ -120,21 +120,6 @@ class TestSessionAudit:
 
 
 class TestAdminMutationAudit:
-    async def test_create_restaurant_placeholder_writes_audit_row(
-        self, app_client: AsyncClient, db_session, data_manager_user: User, user_password: str
-    ) -> None:
-        tokens = await login(app_client, email=data_manager_user.email, password=user_password)
-        response = await app_client.post(
-            "/api/v1/admin/restaurants", headers=auth_headers(tokens["access_token"])
-        )
-        assert response.status_code == 200
-        audit_log_id = response.json()["audit_log_id"]
-
-        result = await db_session.execute(select(AuditLog).where(AuditLog.id == audit_log_id))
-        entry = result.scalar_one()
-        assert entry.action == AuditAction.RESTAURANT_CREATE
-        assert entry.actor_id == data_manager_user.id
-
     # Review-queue audit coverage (approve/reject/edit-approve all write
     # PROPOSED_CHANGE_* audit rows) lives in
     # tests/integration/test_human_in_the_loop.py, since exercising those
@@ -147,11 +132,14 @@ class TestAdminMutationAudit:
     ) -> None:
         tokens = await login(app_client, email=data_manager_user.email, password=user_password)
         response = await app_client.post(
-            "/api/v1/admin/ingestion/trigger", headers=auth_headers(tokens["access_token"])
+            "/api/v1/admin/ingestion/trigger",
+            json={"name": "Joe's Pizza"},
+            headers=auth_headers(tokens["access_token"]),
         )
         assert response.status_code == 200
+        restaurant_seed_id = response.json()["restaurant_seed_id"]
 
-        actions = await _actions_for(db_session, AuditEntityType.AGENT_RUN, "placeholder")
+        actions = await _actions_for(db_session, AuditEntityType.AGENT_RUN, restaurant_seed_id)
         assert AuditAction.AGENT_RUN_TRIGGER in actions
 
     async def test_audit_log_endpoint_returns_recent_entries_for_viewer(
@@ -164,7 +152,9 @@ class TestAdminMutationAudit:
     ) -> None:
         dm_tokens = await login(app_client, email=data_manager_user.email, password=user_password)
         await app_client.post(
-            "/api/v1/admin/restaurants", headers=auth_headers(dm_tokens["access_token"])
+            "/api/v1/admin/ingestion/trigger",
+            json={"name": "Joe's Pizza"},
+            headers=auth_headers(dm_tokens["access_token"]),
         )
 
         viewer_tokens = await login(app_client, email=viewer_user.email, password=user_password)
@@ -174,7 +164,7 @@ class TestAdminMutationAudit:
         assert response.status_code == 200
         body = response.json()
         assert len(body) >= 1
-        assert any(entry["action"] == AuditAction.RESTAURANT_CREATE.value for entry in body)
+        assert any(entry["action"] == AuditAction.AGENT_RUN_TRIGGER.value for entry in body)
 
     async def test_audit_log_endpoint_requires_permission(
         self, app_client: AsyncClient, reviewer_user: User, user_password: str

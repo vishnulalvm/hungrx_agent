@@ -86,7 +86,7 @@ durable audit trail (see `database/README.md`).
 | `workflows/reviewer_workflow/` | LangGraph state machine that checks an already-published restaurant's source for drift (Temporal Hash Polling → ... → Human Final Sync → Publish), early-stopping when the source hash hasn't changed. Reuses the collector workflow's capture/AI-structuring path and the same ProposedChange/Approval review-queue infrastructure. |
 | `apps/api/` | FastAPI backend: auth, admin, agents, mobile routers; services (audit, auth, source authority). |
 | `apps/worker/` | Background job worker (RQ over Redis): restaurant ingestion, source crawling, the collector workflow, maintenance polling, the reviewer workflow, and dead-letter retry sweeps — one job type per module under `app/jobs/`. See `apps/worker/README.md`. |
-| `apps/admin-dashboard/` | Next.js + TypeScript admin UI (separate frontend app). |
+| `apps/admin-dashboard/` | Next.js 15 + TypeScript admin UI. The browser never holds a bearer token — this app's own Route Handlers (`src/app/api/auth/*`, `src/app/api/proxy/[...path]`) sit between the browser and FastAPI, storing the JWT pair as httpOnly cookies. See `apps/admin-dashboard/README.md`. |
 | `tests/` | Cross-cutting unit/integration tests, Postgres-backed via `tests/conftest.py`. |
 
 ## Key architectural decisions (read before changing these areas)
@@ -248,6 +248,51 @@ durable audit trail (see `database/README.md`).
   worker's lock self-heals rather than wedging that restaurant
   permanently; deliberately tolerates a stale lock expiring a little
   early over adding that complexity.
+- **SSRF protection is layered, not a single check.** A restaurant's
+  "official domain" being on `DomainVerifier`'s allow-list only
+  restricts *which hostname* the crawler targets — a hostname passing
+  that check can still resolve to an internal/cloud-metadata address
+  (either because the official URL was an IP literal, or via DNS
+  rebinding: a public IP at verification time, an internal one at
+  connection time). `infrastructure/crawler/ssrf_guard.py` is checked at
+  two independent points: `infrastructure/source_authority/
+  url_normalizer.py`/`domain_validator.py` reject an IP-literal host
+  outright at verification time (cheap, resolution-free — a real
+  restaurant domain is never a bare IP), and `infrastructure/crawler/
+  http_fetcher.py`'s `HttpFetcher.fetch()` re-resolves and checks the
+  *actual* target address immediately before every connection —
+  including every redirect hop, since `follow_redirects=True` would
+  otherwise let a same-domain-verified site's redirect chain end at an
+  internal address with zero re-validation. Redirects are therefore
+  followed manually, one hop at a time, each re-checked against both
+  `DomainVerifier` and `ssrf_guard`; capped at 10 hops. `HttpFetcher`
+  also caps a single response to 25MB (`Content-Length` pre-check plus a
+  running counter while streaming) so an oversized/slow-trickling
+  response can't exhaust worker memory. `BrowserFetcher` (Playwright)
+  does not yet have equivalent per-hop redirect validation — Playwright
+  follows redirects internally with no interception hook wired up here —
+  so it inherits only the allow-list check on the initial URL; it is not
+  the crawler's default path (`HttpFetcher` is), but closing this gap
+  for JS-rendered pages is a known follow-up, not yet done.
+- **Login/refresh are rate-limited; nothing else is.** `apps/api/app/
+  core/rate_limit.py`'s `rate_limit_login`/`rate_limit_refresh` are
+  Redis fixed-window counters (`INCR`+`EXPIRE`, no new dependency —
+  Redis is already required for RQ) applied only to `POST /auth/login`
+  (by IP and, independently, by the attempted email — so neither
+  "many emails from one IP" nor "one email from many IPs" alone escapes
+  it) and `POST /auth/refresh` (by IP). Every other mutating endpoint
+  already requires a valid access token first, so brute-forcing them
+  isn't the same class of problem. Deliberately a no-op when
+  `settings.environment == "test"` (see `tests/conftest.py`, which sets
+  that env var before any app import) since the test suite's ASGI
+  transport gives every request the same "client IP." `Settings` also
+  fails fast at construction (`_reject_weak_secret_in_production`) if
+  `environment=production` and `api_secret_key` is still the
+  committed-in-source `"change-me"` default or otherwise implausibly
+  short — anyone who has read this repo knows that default, so booting
+  production with it unchanged would let anyone forge access tokens
+  (including `role=SUPER_ADMIN`); `create_app()` similarly refuses to
+  start with `CORS_ORIGINS=*` in production.
 
 ## Running things
 
@@ -292,9 +337,10 @@ the collector workflow's `ProposedChange`/interrupt-resume review-queue
 infrastructure), and Publish (updates an already-published restaurant,
 distinct write semantics from the collector workflow's insert-only
 publish node) — see `workflows/reviewer_workflow/README.md` for the
-full node-by-node breakdown. Nothing currently triggers a reviewer run
-automatically (no scheduler/cron wired up yet) — it has to be invoked
-directly, same as the collector workflow.
+full node-by-node breakdown. (At the time this section was originally
+written, nothing triggered a reviewer run automatically; see the
+background-job-processing paragraph below — `maintenance_polling` now
+does, via a periodic sweep.)
 
 Also done: background job processing (`apps/worker/`, RQ over Redis) —
 `restaurant_ingestion` (Source Authority resolution for a brand-new
@@ -313,6 +359,24 @@ caller-supplied seed id instead, since no restaurant id exists yet at
 that stage) and structured-logs its lifecycle
 (`apps/worker/app/jobs/logging.py`). See `apps/worker/README.md` and
 `infrastructure/queue/README.md` for the full breakdown.
+
+Also done: the admin dashboard (`apps/admin-dashboard/`) is connected to
+the real backend — auth (login/logout/refresh, all proxied through this
+app's own Route Handlers so the browser never holds the bearer token),
+protected routes (`middleware.ts`), and typed React Query hooks for
+restaurant management, ingestion triggering, the review queue
+(approve/reject/edit-then-approve), agent run status, and the audit log.
+This closed two real backend gaps that existed only as placeholders
+before: `GET /admin/restaurants`(`/{id}`) and `GET /agents/runs`(`/{id}`)
+are now real reads (`RestaurantRepository`/`AgentRunRepository`'s new
+`list_paginated` methods), and `POST /admin/ingestion/trigger` now
+actually enqueues `apps/worker/app/jobs/restaurant_ingestion.py`'s RQ
+job rather than returning a canned response. `POST /admin/restaurants`
+(the old placeholder) was removed outright rather than implemented —
+there is deliberately no direct restaurant-create endpoint; the only
+write path into the production restaurant tables remains an approved
+review, per the two-layer publish guarantee above. See
+`apps/admin-dashboard/README.md` and `apps/api/README.md`.
 
 `build_graph()` (both workflows) requires `storage`
 (StorageAdapter), `ai_provider` (AIProvider), and `checkpointer`

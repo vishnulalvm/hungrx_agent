@@ -18,7 +18,7 @@ only writes are restricted.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -27,6 +27,7 @@ from core.schemas.menu import Ingredient, Menu as MenuSchema, MenuCategory as Me
 from core.schemas.nutrition import Nutrition
 from core.schemas.restaurant import Restaurant as RestaurantSchema
 from core.schemas.restaurant import RestaurantLocation as RestaurantLocationSchema
+from core.schemas.restaurant import RestaurantSummary
 from database.models.restaurant import Dish, Menu, MenuCategory, Restaurant, RestaurantLocation
 
 
@@ -40,6 +41,49 @@ class RestaurantRepository:
         drift. Read-only, same as get_full_tree."""
         result = await self._session.execute(select(Restaurant.id))
         return list(result.scalars().all())
+
+    async def list_paginated(self, *, page: int, page_size: int) -> tuple[list[RestaurantSummary], int]:
+        """Admin dashboard's restaurant list — deliberately lighter than
+        get_full_tree per row (no menu/dish eager-loading): first
+        location's city plus a dish count via correlated subqueries,
+        most-recently-created first."""
+        total = (await self._session.execute(select(func.count()).select_from(Restaurant))).scalar_one()
+
+        first_location_city = (
+            select(RestaurantLocation.city)
+            .where(RestaurantLocation.restaurant_id == Restaurant.id)
+            .order_by(RestaurantLocation.id)
+            .limit(1)
+            .correlate(Restaurant)
+            .scalar_subquery()
+        )
+        dish_count = (
+            select(func.count(Dish.id))
+            .join(MenuCategory, Dish.category_id == MenuCategory.id)
+            .join(Menu, MenuCategory.menu_id == Menu.id)
+            .where(Menu.restaurant_id == Restaurant.id)
+            .correlate(Restaurant)
+            .scalar_subquery()
+        )
+
+        result = await self._session.execute(
+            select(Restaurant.id, Restaurant.name, Restaurant.is_active, Restaurant.created_at, first_location_city, dish_count)
+            .order_by(Restaurant.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        summaries = [
+            RestaurantSummary(
+                id=row.id,
+                name=row.name,
+                is_active=row.is_active,
+                created_at=row.created_at,
+                city=row[4],
+                menu_item_count=row[5],
+            )
+            for row in result.all()
+        ]
+        return summaries, total
 
     async def get_full_tree(self, restaurant_id: uuid.UUID) -> RestaurantSchema | None:
         """Reads a published restaurant back out as the same

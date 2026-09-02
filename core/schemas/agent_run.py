@@ -25,7 +25,7 @@ class AgentWorkflowType(str, enum.Enum):
 
 
 class AgentRun(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     workflow_type: AgentWorkflowType

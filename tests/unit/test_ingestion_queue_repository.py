@@ -16,8 +16,10 @@ from database.repositories.ingestion_queue_repository import (
 pytestmark = pytest.mark.asyncio
 
 
-def _item(name: str, url: str = "https://example-restaurant.com") -> IngestionQueueItemInput:
-    return IngestionQueueItemInput(name=name, official_url=url)
+def _item(name: str, url: str = "https://example-restaurant.com/menu") -> IngestionQueueItemInput:
+    return IngestionQueueItemInput(
+        name=name, menu_url=url, nutrition_url="https://example-restaurant.com/nutrition"
+    )
 
 
 class TestCreateBatch:

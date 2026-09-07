@@ -9,7 +9,7 @@ import {
   useUploadIngestionBatch,
 } from "@/hooks/use-ingestion-queue";
 import { isApiError } from "@/lib/api/errors";
-import type { IngestionQueueItemInput, IngestionQueueItemSummary } from "@/lib/api/types";
+import type { IngestionQueueItemInput, IngestionQueueItemSummary, IngestionQueueStatus } from "@/lib/api/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,16 @@ const STATUS_BADGE: Record<string, { label: string; variant: "default" | "ok" | 
   failed: { label: "Failed", variant: "attn" },
 };
 
+const STATUS_FILTERS: { label: string; value: IngestionQueueStatus | undefined }[] = [
+  { label: "All", value: undefined },
+  { label: "Queued", value: "queued" },
+  { label: "Running", value: "running" },
+  { label: "Succeeded", value: "succeeded" },
+  { label: "Failed", value: "failed" },
+];
+
+type SortOrder = "updated_desc" | "name_asc";
+
 function parseBulkJson(raw: string): IngestionQueueItemInput[] {
   const parsed = JSON.parse(raw);
   if (!Array.isArray(parsed)) {
@@ -52,7 +62,9 @@ function parseBulkJson(raw: string): IngestionQueueItemInput[] {
 
 export default function IngestionPage() {
   const [page, setPage] = useState(1);
-  const { data, isPending, isError, error, refetch } = useIngestionQueueList(page);
+  const [statusFilter, setStatusFilter] = useState<IngestionQueueStatus | undefined>(undefined);
+  const [sortOrder, setSortOrder] = useState<SortOrder>("updated_desc");
+  const { data, isPending, isError, error, refetch } = useIngestionQueueList(page, statusFilter);
 
   const upload = useUploadIngestionBatch();
   const update = useUpdateIngestionQueueItem();
@@ -63,7 +75,7 @@ export default function IngestionPage() {
   const [parseError, setParseError] = useState<string | null>(null);
 
   const [editing, setEditing] = useState<IngestionQueueItemSummary | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", official_url: "", city: "", state: "", country: "", phone: "" });
+  const [editForm, setEditForm] = useState({ name: "", menu_url: "", nutrition_url: "" });
   const [deleting, setDeleting] = useState<IngestionQueueItemSummary | null>(null);
 
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -85,11 +97,8 @@ export default function IngestionPage() {
     setEditing(item);
     setEditForm({
       name: item.name,
-      official_url: item.official_url,
-      city: item.city ?? "",
-      state: item.state ?? "",
-      country: item.country ?? "",
-      phone: item.phone ?? "",
+      menu_url: item.menu_url,
+      nutrition_url: item.nutrition_url,
     });
   };
 
@@ -100,11 +109,8 @@ export default function IngestionPage() {
         id: editing.id,
         payload: {
           name: editForm.name,
-          official_url: editForm.official_url,
-          city: editForm.city || undefined,
-          state: editForm.state || undefined,
-          country: editForm.country ? editForm.country.toUpperCase() : undefined,
-          phone: editForm.phone || undefined,
+          menu_url: editForm.menu_url,
+          nutrition_url: editForm.nutrition_url,
         },
       },
       { onSuccess: () => setEditing(null) },
@@ -116,22 +122,31 @@ export default function IngestionPage() {
     del.mutate(deleting.id, { onSuccess: () => setDeleting(null) });
   };
 
-  const items = data?.items ?? [];
+  const items = [...(data?.items ?? [])].sort((a, b) =>
+    sortOrder === "name_asc"
+      ? a.name.localeCompare(b.name)
+      : new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+  );
+
+  const selectFilter = (value: IngestionQueueStatus | undefined) => {
+    setStatusFilter(value);
+    setPage(1);
+  };
 
   return (
     <div className="container py-8">
       <h1 className="text-xl font-bold tracking-tight text-ink">Ingestion</h1>
       <p className="mt-1 text-sm text-ink-faint">
-        Upload a verified batch of restaurants with known official URLs — Source Authority search is
-        skipped, but each URL is still validated before the pipeline runs. Restaurants are processed
-        strictly one at a time.
+        Upload a verified batch of restaurants with known menu and nutrition page URLs — Source
+        Authority search is skipped, but the menu URL is still validated before the pipeline runs.
+        Restaurants are processed strictly one at a time.
       </p>
 
       <Card className="mt-6 max-w-lg">
         <CardHeader>
           <CardTitle>Upload a batch</CardTitle>
           <CardDescription>
-            A JSON file containing an array of {"{ name, official_url, city?, state?, country?, phone? }"}.
+            A JSON file containing an array of {"{ name, menu_url, nutrition_url }"}.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -172,7 +187,37 @@ export default function IngestionPage() {
       </Card>
 
       <div className="mt-8">
-        <h2 className="text-sm font-semibold text-ink">Queue</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-ink">Queue</h2>
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex flex-wrap gap-1.5">
+              {STATUS_FILTERS.map((filter) => (
+                <Button
+                  key={filter.label}
+                  variant={statusFilter === filter.value ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => selectFilter(filter.value)}
+                >
+                  {filter.label}
+                </Button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="sort-order" className="text-[12.5px] text-ink-faint">
+                Sort
+              </Label>
+              <select
+                id="sort-order"
+                className="h-8 rounded-md border border-line bg-transparent px-2 text-[12.5px] text-ink"
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+              >
+                <option value="updated_desc">Recently updated</option>
+                <option value="name_asc">Name (A–Z)</option>
+              </select>
+            </div>
+          </div>
+        </div>
         <div className="mt-3">
           {isPending ? (
             <TableSkeleton />
@@ -185,8 +230,8 @@ export default function IngestionPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
-                  <TableHead>Official URL</TableHead>
-                  <TableHead>Location</TableHead>
+                  <TableHead>Menu URL</TableHead>
+                  <TableHead>Nutrition URL</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Updated</TableHead>
                   <TableHead />
@@ -200,10 +245,8 @@ export default function IngestionPage() {
                   return (
                     <TableRow key={item.id}>
                       <TableCell className="font-medium">{item.name}</TableCell>
-                      <TableCell className="max-w-xs truncate text-ink-faint">{item.official_url}</TableCell>
-                      <TableCell className="text-ink-faint">
-                        {[item.city, item.state, item.country].filter(Boolean).join(", ") || "—"}
-                      </TableCell>
+                      <TableCell className="max-w-xs truncate text-ink-faint">{item.menu_url}</TableCell>
+                      <TableCell className="max-w-xs truncate text-ink-faint">{item.nutrition_url}</TableCell>
                       <TableCell>
                         <Badge variant={badge.variant}>{badge.label}</Badge>
                         {item.status === "failed" && item.error_message && (
@@ -295,49 +338,20 @@ export default function IngestionPage() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="edit-url">Official URL</Label>
+              <Label htmlFor="edit-menu-url">Menu URL</Label>
               <Input
-                id="edit-url"
-                value={editForm.official_url}
-                onChange={(e) => setEditForm((f) => ({ ...f, official_url: e.target.value }))}
+                id="edit-menu-url"
+                value={editForm.menu_url}
+                onChange={(e) => setEditForm((f) => ({ ...f, menu_url: e.target.value }))}
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="edit-city">City</Label>
-                <Input
-                  id="edit-city"
-                  value={editForm.city}
-                  onChange={(e) => setEditForm((f) => ({ ...f, city: e.target.value }))}
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="edit-state">State</Label>
-                <Input
-                  id="edit-state"
-                  value={editForm.state}
-                  onChange={(e) => setEditForm((f) => ({ ...f, state: e.target.value }))}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="edit-country">Country code</Label>
-                <Input
-                  id="edit-country"
-                  maxLength={2}
-                  value={editForm.country}
-                  onChange={(e) => setEditForm((f) => ({ ...f, country: e.target.value }))}
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="edit-phone">Phone</Label>
-                <Input
-                  id="edit-phone"
-                  value={editForm.phone}
-                  onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
-                />
-              </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="edit-nutrition-url">Nutrition URL</Label>
+              <Input
+                id="edit-nutrition-url"
+                value={editForm.nutrition_url}
+                onChange={(e) => setEditForm((f) => ({ ...f, nutrition_url: e.target.value }))}
+              />
             </div>
           </div>
 

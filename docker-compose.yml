@@ -83,6 +83,20 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Headless-browser proxy that solves Cloudflare (and similar) JS
+  # challenges. HttpFetcher only calls this when FLARESOLVERR_URL is set
+  # (see .env.example) and only as a fallback after a direct fetch comes
+  # back looking like a challenge page — it is never the crawler's
+  # default path. No ports published; only `worker` talks to it, over
+  # the internal network.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    environment:
+      LOG_LEVEL: info
+    networks:
+      - hungrx_network
+    restart: unless-stopped
+
   admin-dashboard:
     build:
       context: apps/admin-dashboard

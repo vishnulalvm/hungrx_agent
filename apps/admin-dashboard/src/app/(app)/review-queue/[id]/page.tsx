@@ -90,11 +90,13 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
   return (
     <div className="container py-8">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-bold tracking-tight text-ink">Review {review.entity_type}</h1>
+        <h1 className="text-xl font-bold tracking-tight text-ink">
+          {review.name ?? `Review ${review.entity_type}`}
+        </h1>
         <Badge variant="accent">{review.status}</Badge>
       </div>
       <p className="mt-1 text-sm text-ink-faint">
-        Submitted {new Date(review.created_at).toLocaleString()}
+        {review.entity_type} · Submitted {new Date(review.created_at).toLocaleString()}
       </p>
 
       {validation && (

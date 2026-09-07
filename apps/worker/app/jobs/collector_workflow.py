@@ -35,11 +35,15 @@ JOB_TYPE = "collector_workflow"
 
 
 async def _run(
-    *, restaurant_id: str, restaurant_name: str, city, state, country, phone, official_url: str | None = None
+    *,
+    restaurant_id: str,
+    restaurant_name: str,
+    menu_url: str | None = None,
+    nutrition_url: str | None = None,
 ) -> dict[str, Any]:
     import uuid
 
-    from core.schemas.restaurant import Restaurant, RestaurantLocation
+    from core.schemas.restaurant import Restaurant
     from infrastructure.checkpointer import get_checkpointer
     from workflows.collector_workflow.dependencies import default_ai_provider, default_storage_adapter
     from workflows.collector_workflow.graph import build_graph
@@ -47,22 +51,19 @@ async def _run(
     settings = get_settings()
     session_factory = get_sessionmaker()
 
-    locations = []
-    if city and country:
-        locations.append(RestaurantLocation(address_line1="Unknown", city=city, state=state, country=country))
-    restaurant = Restaurant(id=uuid.UUID(restaurant_id), name=restaurant_name, locations=locations)
+    restaurant = Restaurant(id=uuid.UUID(restaurant_id), name=restaurant_name)
 
-    # official_url is set only for manually-ingested restaurants (see
+    # menu_url is set only for manually-ingested restaurants (see
     # apps/worker/app/jobs/ingestion_queue_dispatcher.py) — it swaps the
     # graph's own source_authority node onto a provider that already knows
     # the one right answer instead of NullEntityResolutionProvider's
     # default, which always returns NOT_FOUND. See
     # infrastructure/source_authority/manual_provider.py.
     provider = None
-    if official_url is not None:
+    if menu_url is not None:
         from infrastructure.source_authority.manual_provider import ManualUrlEntityResolutionProvider
 
-        provider = ManualUrlEntityResolutionProvider(official_url)
+        provider = ManualUrlEntityResolutionProvider(menu_url)
 
     async with session_factory() as session:
         async with get_checkpointer(settings) as checkpointer:
@@ -74,7 +75,10 @@ async def _run(
                 checkpointer=checkpointer,
             )
             config = {"configurable": {"thread_id": str(uuid.uuid4())}}
-            result = await graph.ainvoke({"restaurant": restaurant}, config)
+            initial_state: dict[str, Any] = {"restaurant": restaurant}
+            if nutrition_url is not None:
+                initial_state["nutrition_url"] = nutrition_url
+            result = await graph.ainvoke(initial_state, config)
         await session.commit()
 
     return {
@@ -88,21 +92,20 @@ def run_collector_workflow(
     *,
     restaurant_id: str,
     restaurant_name: str = "",
-    city: str | None = None,
-    state: str | None = None,
-    country: str | None = None,
-    phone: str | None = None,
     source_id: str | None = None,
     source_snapshot_id: str | None = None,
-    official_url: str | None = None,
+    menu_url: str | None = None,
+    nutrition_url: str | None = None,
 ) -> dict[str, Any]:
     """RQ entry point. `source_id`/`source_snapshot_id` (from a preceding
     source_crawl job) are accepted for correlation/logging only — see
     module docstring for why the graph re-derives its own source state
-    rather than trusting these. `official_url` is the exception: when set
-    (manual ingestion only), it's passed to `_run` to swap the graph's
-    internal source_authority node onto a provider that already knows the
-    verified URL, rather than one that searches."""
+    rather than trusting these. `menu_url`/`nutrition_url` are the
+    exception: when set (manual ingestion only), `menu_url` is passed to
+    `_run` to swap the graph's internal source_authority node onto a
+    provider that already knows the verified URL rather than one that
+    searches, and `nutrition_url` is passed through onto graph state for
+    the extraction node to fetch explicitly."""
     configure_logging(get_settings())
     job = get_current_job()
     job_id = job.id if job else "sync"
@@ -121,11 +124,8 @@ def run_collector_workflow(
                 _run,
                 restaurant_id=restaurant_id,
                 restaurant_name=restaurant_name,
-                city=city,
-                state=state,
-                country=country,
-                phone=phone,
-                official_url=official_url,
+                menu_url=menu_url,
+                nutrition_url=nutrition_url,
             )
     except JobAlreadyRunningError as exc:
         log_skipped(job_id=job_id, job_type=JOB_TYPE, restaurant_id=restaurant_id, reason=str(exc))

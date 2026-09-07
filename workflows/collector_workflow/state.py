@@ -74,6 +74,12 @@ class CollectorState(TypedDict, total=False):
     source_url: str
     source: Source
 
+    # Caller-supplied nutrition page URL (manual ingestion only — see
+    # apps/worker/app/jobs/ingestion_queue_dispatcher.py). Extraction
+    # fetches this explicitly alongside source_url rather than relying on
+    # its own link-discovery to find it.
+    nutrition_url: str
+
     # Crawl capture. `source_snapshot` is the primary/first captured page
     # (kept for backwards-compatible single-snapshot access);
     # `source_snapshots` is the full set captured by the Extraction node

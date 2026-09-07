@@ -6,12 +6,16 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+// Ordered to match the pipeline flow: upload restaurants (Ingestion),
+// watch them run (Agent Runs), approve/reject results (Review Queue),
+// see what's published (Restaurants), then the full history (Audit Log).
+// Dashboard stays first as the overview landing page.
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
-  { href: "/restaurants", label: "Restaurants" },
   { href: "/ingestion", label: "Ingestion" },
-  { href: "/review-queue", label: "Review Queue" },
   { href: "/agent-runs", label: "Agent Runs" },
+  { href: "/review-queue", label: "Review Queue" },
+  { href: "/restaurants", label: "Restaurants" },
   { href: "/audit-log", label: "Audit Log" },
 ];
 

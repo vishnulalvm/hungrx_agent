@@ -5,6 +5,16 @@ allow-list), ssrf_guard (rejects private/loopback/link-local/reserved
 resolved addresses — SSRF/cloud-metadata protection), and
 RobotsChecker + DomainLock (politeness/rate-limiting) before a request
 is made.
+
+When `flaresolverr_url` is configured (see core/config/settings.py), a
+direct response that looks like a Cloudflare JS challenge (403/503 plus
+a Cloudflare marker — see `_looks_like_cloudflare_challenge`) is retried
+exactly once through FlareSolverr instead of being returned/raised as a
+failure. FlareSolverr runs its own headless browser to solve the
+challenge and hands back the resulting HTML — it does its own outbound
+fetch from inside its own container, so this is only ever used for a
+URL that already passed `_validate_target` (domain-verified,
+SSRF-checked) on this call.
 """
 
 from urllib.parse import urljoin
@@ -16,6 +26,38 @@ from infrastructure.crawler.domain_lock import DomainLock, DomainVerifier, extra
 from infrastructure.crawler.fetch_result import FetchResult
 from infrastructure.crawler.robots import RobotsChecker
 from infrastructure.crawler.ssrf_guard import UnsafeHostError, assert_safe_host
+
+# Status codes Cloudflare (and similar WAFs) use for a JS/browser
+# challenge page rather than a real "forbidden"/"unavailable" response.
+_CHALLENGE_STATUS_CODES = {403, 503}
+
+# Cheap, low-false-positive markers that the *content itself* is a
+# challenge page — checked in addition to status code so a site's own
+# genuine 403/503 (e.g. real access-denied, real maintenance page) isn't
+# mistaken for a solvable challenge and silently retried.
+_CLOUDFLARE_BODY_MARKERS = (
+    b"cf-browser-verification",
+    b"cf_chl_",
+    b"Checking your browser before accessing",
+    b"Attention Required! | Cloudflare",
+    b"Just a moment...",
+)
+
+# FlareSolverr's default request timeout for solving a challenge is
+# generous (its own internal default is 60s); this is our client-side
+# ceiling on top of that.
+_FLARESOLVERR_TIMEOUT_SECONDS = 65.0
+
+
+def _looks_like_cloudflare_challenge(*, status_code: int, headers: httpx.Headers, body: bytes) -> bool:
+    if status_code not in _CHALLENGE_STATUS_CODES:
+        return False
+    if "cloudflare" in headers.get("server", "").lower():
+        return True
+    if headers.get("cf-mitigated") is not None:
+        return True
+    return any(marker in body for marker in _CLOUDFLARE_BODY_MARKERS)
+
 
 # Same de-facto ceiling browsers use — a redirect chain longer than this
 # is either a misconfiguration or a redirect loop, not a legitimate site.
@@ -62,15 +104,27 @@ class HttpFetcher:
         timeout_seconds: float = 20.0,
         respect_robots: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
+        flaresolverr_url: str | None = None,
+        flaresolverr_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         """`transport` is a test-only seam (httpx.MockTransport) for
         exercising fetch()'s redirect/SSRF-guard/size-cap logic without a
-        real network call; production callers never pass it."""
+        real network call; production callers never pass it.
+        `flaresolverr_url` enables the Cloudflare-challenge fallback (see
+        module docstring) when set; `flaresolverr_transport` is the same
+        kind of test-only seam as `transport`, for the separate client
+        used to call FlareSolverr."""
         self._domain_verifier = domain_verifier
         self._domain_lock = domain_lock
         self._user_agent = user_agent
         self._timeout_seconds = timeout_seconds
         self._respect_robots = respect_robots
+        self._flaresolverr_url = flaresolverr_url.rstrip("/") if flaresolverr_url else None
+        self._flaresolverr_client = (
+            httpx.AsyncClient(timeout=_FLARESOLVERR_TIMEOUT_SECONDS, transport=flaresolverr_transport)
+            if self._flaresolverr_url
+            else None
+        )
         self._client = httpx.AsyncClient(
             headers={"User-Agent": user_agent},
             # Redirects are followed manually, one hop at a time, in
@@ -87,6 +141,8 @@ class HttpFetcher:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+        if self._flaresolverr_client is not None:
+            await self._flaresolverr_client.aclose()
 
     async def __aenter__(self) -> "HttpFetcher":
         return self
@@ -142,6 +198,14 @@ class HttpFetcher:
                         continue
 
                     content = await self._read_capped(response)
+
+                    if self._flaresolverr_client is not None and _looks_like_cloudflare_challenge(
+                        status_code=response.status_code, headers=response.headers, body=content
+                    ):
+                        solved = await self._fetch_via_flaresolverr(current_url)
+                        if solved is not None:
+                            return solved
+
                     return FetchResult(
                         url=str(response.url),
                         content_type=_classify_content_type(response.headers.get("content-type")),
@@ -151,6 +215,45 @@ class HttpFetcher:
                     )
 
         raise TooManyRedirectsError(f"Exceeded {_MAX_REDIRECTS} redirects fetching {url!r}")
+
+    async def _fetch_via_flaresolverr(self, url: str) -> FetchResult | None:
+        """Asks FlareSolverr to solve the challenge for `url` and returns
+        the resulting page as a FetchResult, or None if FlareSolverr
+        itself failed to solve it (caller then falls back to the
+        original direct-fetch response rather than treating this as a
+        hard failure — FlareSolverr is a best-effort fallback)."""
+        assert self._flaresolverr_client is not None and self._flaresolverr_url is not None
+
+        try:
+            response = await self._flaresolverr_client.post(
+                f"{self._flaresolverr_url}/v1",
+                json={
+                    "cmd": "request.get",
+                    "url": url,
+                    "maxTimeout": int(_FLARESOLVERR_TIMEOUT_SECONDS * 1000),
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+
+        if payload.get("status") != "ok":
+            return None
+
+        solution = payload.get("solution") or {}
+        html = solution.get("response")
+        if not isinstance(html, str):
+            return None
+
+        content = html.encode("utf-8")
+        return FetchResult(
+            url=solution.get("url", url),
+            content_type=SnapshotContentType.HTML,
+            content=content,
+            http_status=solution.get("status", 200),
+            content_length_bytes=len(content),
+        )
 
     async def _read_capped(self, response: httpx.Response) -> bytes:
         content_length = response.headers.get("content-length")

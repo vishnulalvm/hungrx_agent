@@ -43,6 +43,7 @@ export default function ReviewQueuePage() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>Restaurant</TableHead>
                 <TableHead>Entity</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Submitted</TableHead>
@@ -56,8 +57,11 @@ export default function ReviewQueuePage() {
                       href={`/review-queue/${review.id}`}
                       className="font-medium hover:underline"
                     >
-                      {ENTITY_LABEL[review.entity_type] ?? review.entity_type}
+                      {review.name ?? "(unnamed)"}
                     </Link>
+                  </TableCell>
+                  <TableCell className="text-ink-faint">
+                    {ENTITY_LABEL[review.entity_type] ?? review.entity_type}
                   </TableCell>
                   <TableCell>
                     <Badge variant="accent">{review.status}</Badge>

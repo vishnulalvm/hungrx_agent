@@ -237,9 +237,11 @@ async def trigger_ingestion(
 
 # --- Manual/verified ingestion queue: a separate path from the search-
 # based /ingestion/trigger above. The admin already knows the restaurant's
-# official URL (a bulk-verified list), so there's nothing to search for —
-# apps/api/app/services/manual_source_verification.py still validates the
-# supplied URL (aggregator blocklist, domain checks) before trusting it.
+# menu page URL and nutrition page URL (a bulk-verified list), so there's
+# nothing to search for — apps/api/app/services/manual_source_verification.py
+# still validates the supplied menu URL (aggregator blocklist, domain
+# checks) before trusting it, and the collector workflow's extraction node
+# fetches the nutrition URL explicitly rather than discovering it.
 # Restaurants are processed strictly one at a time by
 # apps/worker/app/jobs/ingestion_queue_dispatcher.py; see
 # database/repositories/ingestion_queue_repository.py for the QUEUED-only
@@ -331,11 +333,8 @@ async def update_ingestion_queue_item(
         item = await IngestionQueueRepository(db).update_if_queued(
             item_id,
             name=payload.name,
-            official_url=payload.official_url,
-            city=payload.city,
-            state=payload.state,
-            country=payload.country,
-            phone=payload.phone,
+            menu_url=payload.menu_url,
+            nutrition_url=payload.nutrition_url,
         )
     except InvalidQueueStateError as exc:
         raise ConflictError(str(exc)) from exc

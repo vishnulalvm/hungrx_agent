@@ -11,8 +11,10 @@ Responsibilities (per the collector workflow's Agent 2 spec):
   - inspect the verified source (state["source"] / state["source_url"],
     written by the source_authority node — this node never guesses a URL
     itself)
-  - identify relevant menu/nutrition pages via deterministic link
-    discovery (infrastructure.crawler.page_discovery), not AI
+  - identify relevant menu/nutrition pages either from a caller-supplied
+    nutrition URL (state["nutrition_url"], manual ingestion only) or,
+    absent that, via deterministic link discovery
+    (infrastructure.crawler.page_discovery) — never AI
   - capture required source material: HTML via httpx, PDFs via httpx
     (content-type based), and a screenshot via Playwright only when the
     root page's HTML looks suspiciously thin (likely JS-rendered) —
@@ -150,10 +152,13 @@ def build_extraction_node(
             return {"errors": [{"node": NODE_NAME, "message": message}]}
 
         run_id = state.get("agent_run_id")
+        nutrition_url: str | None = state.get("nutrition_url")
         fetcher = factory(source.url)
 
         try:
-            snapshots = await _capture_source_material(fetcher, source=source, source_url=source_url)
+            snapshots = await _capture_source_material(
+                fetcher, source=source, source_url=source_url, nutrition_url=nutrition_url
+            )
         except Exception as exc:  # crawler/storage failures must not crash the graph run
             failure_message = f"extraction failed to capture source material for source_id={source.id}: {exc}"
             logger.warning(failure_message)
@@ -181,28 +186,43 @@ def build_extraction_node(
 
 
 async def _capture_source_material(
-    fetcher: PageFetcher, *, source: Source, source_url: str
+    fetcher: PageFetcher, *, source: Source, source_url: str, nutrition_url: str | None = None
 ) -> list[SourceSnapshot]:
-    """Fetches the source page itself, then (for HTML pages) discovers
-    and fetches menu/nutrition-relevant linked pages. Every fetch is
-    captured and persisted as a SourceSnapshot; no content is interpreted
-    here — only whether a page looks relevant enough to capture."""
+    """Fetches the source (menu) page itself, then either fetches the
+    caller-supplied nutrition page explicitly (manual ingestion — see
+    CollectorState.nutrition_url) or, when none was supplied, falls back
+    to deterministic link discovery to find menu/nutrition-relevant linked
+    pages on its own. Every fetch is captured and persisted as a
+    SourceSnapshot; no content is interpreted here — only whether a page
+    looks relevant enough to capture."""
 
     root_capture = await fetcher.fetch_html_or_pdf(source_id=source.id, url=source_url)
     snapshots = [root_capture.snapshot]
+
+    is_thin_html = (
+        root_capture.snapshot.content_type == SnapshotContentType.HTML
+        and root_capture.html is not None
+        and len(root_capture.html.encode("utf-8")) < _THIN_HTML_BYTES_THRESHOLD
+    )
+    if is_thin_html:
+        # Likely a client-side-rendered shell; fall back to a
+        # browser-rendered screenshot capture of the same page rather
+        # than silently returning an near-empty snapshot.
+        screenshot_capture = await fetcher.fetch_screenshot(source_id=source.id, url=source_url)
+        snapshots.append(screenshot_capture.snapshot)
+
+    if nutrition_url is not None:
+        domain_verifier = DomainVerifier(source.url)
+        domain_verifier.assert_allowed(nutrition_url)
+        nutrition_capture = await fetcher.fetch_html_or_pdf(source_id=source.id, url=nutrition_url)
+        snapshots.append(nutrition_capture.snapshot)
+        return snapshots
 
     if root_capture.snapshot.content_type != SnapshotContentType.HTML or root_capture.html is None:
         # A PDF (or an HTML fetch whose body we couldn't read back) is
         # already the whole capture — there's no <head>/<a> structure to
         # run link discovery against.
         return snapshots
-
-    if len(root_capture.html.encode("utf-8")) < _THIN_HTML_BYTES_THRESHOLD:
-        # Likely a client-side-rendered shell; fall back to a
-        # browser-rendered screenshot capture of the same page rather
-        # than silently returning an near-empty snapshot.
-        screenshot_capture = await fetcher.fetch_screenshot(source_id=source.id, url=source_url)
-        snapshots.append(screenshot_capture.snapshot)
 
     domain_verifier = DomainVerifier(source.url)
     candidate_urls = find_menu_page_links(

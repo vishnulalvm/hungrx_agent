@@ -11,7 +11,9 @@ from database.models.base import Base
 
 class IngestionQueueItem(Base):
     """One admin-supplied, pre-verified restaurant awaiting the manual
-    ingestion pipeline (verify URL -> crawl -> collector workflow). Rows
+    ingestion pipeline (verify menu_url -> crawl -> collector workflow,
+    with nutrition_url fetched explicitly by the collector's extraction
+    node). Rows
     are created in bulk from one upload (grouped by `batch_id`) and
     processed strictly one at a time by
     apps/worker/app/jobs/ingestion_queue_dispatcher.py, which claims the
@@ -32,11 +34,8 @@ class IngestionQueueItem(Base):
     batch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    official_url: Mapped[str] = mapped_column(String(2048), nullable=False)
-    city: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    state: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    country: Mapped[str | None] = mapped_column(String(2), nullable=True)
-    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    menu_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    nutrition_url: Mapped[str] = mapped_column(String(2048), nullable=False)
 
     status: Mapped[IngestionQueueStatus] = mapped_column(
         Enum(IngestionQueueStatus, name="ingestion_queue_status", native_enum=True),

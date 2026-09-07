@@ -2,9 +2,11 @@
 queue (apps/api/app/routers/v1/admin/router.py's /ingestion-queue
 endpoints). This is a separate path from core/schemas/ingestion.py's
 search-based single-restaurant trigger: here the admin already knows and
-supplies the restaurant's official URL — see
-apps/api/app/services/manual_source_verification.py, which validates
-(never searches for) that URL before it's trusted."""
+supplies both the restaurant's menu page URL and its nutrition page URL
+directly — see apps/api/app/services/manual_source_verification.py, which
+validates (never searches for) the menu URL before it's trusted, and
+workflows/collector_workflow/nodes/extraction.py, which fetches the
+nutrition URL explicitly rather than discovering it."""
 
 import enum
 import uuid
@@ -26,11 +28,8 @@ class IngestionQueueItemInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
-    official_url: str = Field(min_length=1, max_length=2048)
-    city: str | None = None
-    state: str | None = None
-    country: str | None = Field(default=None, min_length=2, max_length=2)
-    phone: str | None = None
+    menu_url: str = Field(min_length=1, max_length=2048)
+    nutrition_url: str = Field(min_length=1, max_length=2048)
 
 
 class IngestionQueueBulkUploadRequest(BaseModel):
@@ -45,11 +44,8 @@ class IngestionQueueItemSummary(BaseModel):
     id: uuid.UUID
     batch_id: uuid.UUID
     name: str
-    official_url: str
-    city: str | None
-    state: str | None
-    country: str | None
-    phone: str | None
+    menu_url: str
+    nutrition_url: str
     status: IngestionQueueStatus
     restaurant_seed_id: str | None
     error_message: str | None
@@ -73,8 +69,5 @@ class IngestionQueueItemEditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    official_url: str | None = Field(default=None, min_length=1, max_length=2048)
-    city: str | None = None
-    state: str | None = None
-    country: str | None = Field(default=None, min_length=2, max_length=2)
-    phone: str | None = None
+    menu_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    nutrition_url: str | None = Field(default=None, min_length=1, max_length=2048)

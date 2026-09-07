@@ -133,6 +133,99 @@ class TestRedirectRevalidation:
             await fetcher.fetch("https://example.com/loop")
 
 
+class TestFlareSolverrFallback:
+    def _fetcher_with_flaresolverr(
+        self, handler, flaresolverr_handler, *, monkeypatch, resolve_map: dict[str, str]
+    ) -> HttpFetcher:
+        monkeypatch.setattr(ssrf_guard, "_resolve", _resolve_map(resolve_map))
+        return HttpFetcher(
+            domain_verifier=DomainVerifier("example.com"),
+            domain_lock=DomainLock(min_interval_seconds=0.0),
+            user_agent="test-agent",
+            respect_robots=False,
+            transport=httpx.MockTransport(handler),
+            flaresolverr_url="http://flaresolverr:8191",
+            flaresolverr_transport=httpx.MockTransport(flaresolverr_handler),
+        )
+
+    async def test_retries_a_cloudflare_challenge_via_flaresolverr(self, monkeypatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                403,
+                headers={"server": "cloudflare"},
+                content=b"<html>Attention Required! | Cloudflare</html>",
+            )
+
+        def flaresolverr_handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/v1"
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "solution": {
+                        "url": "https://example.com/menu",
+                        "status": 200,
+                        "response": "<html>real menu</html>",
+                    },
+                },
+            )
+
+        fetcher = self._fetcher_with_flaresolverr(
+            handler, flaresolverr_handler, monkeypatch=monkeypatch, resolve_map={"example.com": "93.184.216.34"}
+        )
+        result = await fetcher.fetch("https://example.com/menu")
+
+        assert result.content == b"<html>real menu</html>"
+        assert result.http_status == 200
+
+    async def test_falls_back_to_direct_response_when_flaresolverr_fails_to_solve(self, monkeypatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                403,
+                headers={"server": "cloudflare"},
+                content=b"<html>Attention Required! | Cloudflare</html>",
+            )
+
+        def flaresolverr_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"status": "error", "message": "could not solve"})
+
+        fetcher = self._fetcher_with_flaresolverr(
+            handler, flaresolverr_handler, monkeypatch=monkeypatch, resolve_map={"example.com": "93.184.216.34"}
+        )
+        result = await fetcher.fetch("https://example.com/menu")
+
+        assert result.http_status == 403
+        assert b"Cloudflare" in result.content
+
+    async def test_does_not_call_flaresolverr_for_a_genuine_non_cloudflare_403(self, monkeypatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(403, content=b"<html>Access Denied</html>")
+
+        def flaresolverr_handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("must not call FlareSolverr for a non-Cloudflare 403")
+
+        fetcher = self._fetcher_with_flaresolverr(
+            handler, flaresolverr_handler, monkeypatch=monkeypatch, resolve_map={"example.com": "93.184.216.34"}
+        )
+        result = await fetcher.fetch("https://example.com/menu")
+
+        assert result.http_status == 403
+
+    async def test_disabled_when_flaresolverr_url_not_configured(self, monkeypatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                403,
+                headers={"server": "cloudflare"},
+                content=b"<html>Attention Required! | Cloudflare</html>",
+            )
+
+        fetcher = _fetcher(handler, monkeypatch=monkeypatch, resolve_map={"example.com": "93.184.216.34"})
+        result = await fetcher.fetch("https://example.com/menu")
+
+        assert result.http_status == 403
+        assert b"Cloudflare" in result.content
+
+
 class TestResponseSizeCap:
     async def test_rejects_oversized_content_length(self, monkeypatch) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

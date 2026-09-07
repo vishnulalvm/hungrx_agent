@@ -1,0 +1,507 @@
+[
+  {
+    "name": "McDonald's",
+    "menu_url": "https://www.mcdonalds.com/menu",
+    "nutrition_url": "https://www.mcdonalds.com/us/en-us/about-our-food/nutrition-calculator.html"
+  },
+  {
+    "name": "Burger King",
+    "menu_url": "https://www.bk.com/menu",
+    "nutrition_url": "https://www.bk.com/nutrition"
+  },
+  {
+    "name": "Wendy's",
+    "menu_url": "https://www.wendys.com/menu",
+    "nutrition_url": "https://www.wendys.com/food/nutrition"
+  },
+  {
+    "name": "Subway",
+    "menu_url": "https://www.subway.com/menu",
+    "nutrition_url": "https://www.subway.com/en-us/menunutrition/nutrition"
+  },
+  {
+    "name": "Taco Bell",
+    "menu_url": "https://www.tacobell.com/menu",
+    "nutrition_url": "https://www.tacobell.com/food/nutrition"
+  },
+  {
+    "name": "KFC",
+    "menu_url": "https://www.kfc.com/menu",
+    "nutrition_url": "https://www.kfc.com/nutrition"
+  },
+  {
+    "name": "Chick-fil-A",
+    "menu_url": "https://www.chick-fil-a.com/menu",
+    "nutrition_url": "https://www.chick-fil-a.com/menu/nutrition"
+  },
+  {
+    "name": "Popeyes",
+    "menu_url": "https://www.popeyes.com/menu",
+    "nutrition_url": "https://www.popeyes.com/nutrition"
+  },
+  {
+    "name": "Chipotle",
+    "menu_url": "https://www.chipotle.com/menu",
+    "nutrition_url": "https://www.chipotle.com/nutrition-calculator"
+  },
+  {
+    "name": "Panera Bread",
+    "menu_url": "https://www.panerabread.com/menu",
+    "nutrition_url": "https://www.panerabread.com/en-us/nutrition-info.html"
+  },
+  {
+    "name": "Starbucks",
+    "menu_url": "https://www.starbucks.com/menu",
+    "nutrition_url": "https://www.starbucks.com/menu/catalog/nutrition"
+  },
+  {
+    "name": "Dunkin'",
+    "menu_url": "https://www.dunkindonuts.com/menu",
+    "nutrition_url": "https://www.dunkindonuts.com/en/menu/nutrition-info"
+  },
+  {
+    "name": "Domino's Pizza",
+    "menu_url": "https://www.dominos.com/menu",
+    "nutrition_url": "https://www.dominos.com/en/pages/order/menu/nutrition/"
+  },
+  {
+    "name": "Pizza Hut",
+    "menu_url": "https://www.pizzahut.com/menu",
+    "nutrition_url": "https://www.pizzahut.com/nutrition"
+  },
+  {
+    "name": "Papa John's",
+    "menu_url": "https://www.papajohns.com/menu",
+    "nutrition_url": "https://www.papajohns.com/menu/nutritional-information"
+  },
+  {
+    "name": "Little Caesars",
+    "menu_url": "https://littlecaesars.com/menu",
+    "nutrition_url": "https://littlecaesars.com/en-us/food-quality/nutrition/"
+  },
+  {
+    "name": "Arby's",
+    "menu_url": "https://arbys.com/menu",
+    "nutrition_url": "https://arbys.com/nutrition"
+  },
+  {
+    "name": "Sonic Drive-In",
+    "menu_url": "https://www.sonicdrivein.com/menu",
+    "nutrition_url": "https://www.sonicdrivein.com/menu/nutrition"
+  },
+  {
+    "name": "Dairy Queen",
+    "menu_url": "https://www.dairyqueen.com/menu",
+    "nutrition_url": "https://www.dairyqueen.com/en-us/food/Nutrition/"
+  },
+  {
+    "name": "Jack in the Box",
+    "menu_url": "https://www.jackinthebox.com/menu",
+    "nutrition_url": "https://www.jackinthebox.com/menu/nutrition"
+  },
+  {
+    "name": "Carl's Jr.",
+    "menu_url": "https://www.carlsjr.com/menu",
+    "nutrition_url": "https://www.carlsjr.com/nutrition"
+  },
+  {
+    "name": "Hardee's",
+    "menu_url": "https://www.hardees.com/menu",
+    "nutrition_url": "https://www.hardees.com/nutrition"
+  },
+  {
+    "name": "Whataburger",
+    "menu_url": "https://whataburger.com/menu",
+    "nutrition_url": "https://whataburger.com/menu/nutrition"
+  },
+  {
+    "name": "In-N-Out Burger",
+    "menu_url": "https://www.in-n-out.com/menu",
+    "nutrition_url": "https://www.in-n-out.com/nutrition"
+  },
+  {
+    "name": "Five Guys",
+    "menu_url": "https://www.fiveguys.com/menu",
+    "nutrition_url": "https://www.fiveguys.com/fgmenu/nutrition-and-allergens"
+  },
+  {
+    "name": "Shake Shack",
+    "menu_url": "https://www.shakeshack.com/menu",
+    "nutrition_url": "https://www.shakeshack.com/nutrition/"
+  },
+  {
+    "name": "Culver's",
+    "menu_url": "https://www.culvers.com/menu",
+    "nutrition_url": "https://www.culvers.com/nutrition"
+  },
+  {
+    "name": "White Castle",
+    "menu_url": "https://www.whitecastle.com/menu",
+    "nutrition_url": "https://www.whitecastle.com/nutrition"
+  },
+  {
+    "name": "Panda Express",
+    "menu_url": "https://www.pandaexpress.com/menu",
+    "nutrition_url": "https://www.pandaexpress.com/nutrition"
+  },
+  {
+    "name": "Chuy's",
+    "menu_url": "https://www.chuys.com/menu",
+    "nutrition_url": "https://www.chuys.com/nutrition"
+  },
+  {
+    "name": "Wingstop",
+    "menu_url": "https://www.wingstop.com/menu",
+    "nutrition_url": "https://www.wingstop.com/nutrition"
+  },
+  {
+    "name": "Zaxby's",
+    "menu_url": "https://www.zaxbys.com/menu",
+    "nutrition_url": "https://www.zaxbys.com/nutrition"
+  },
+  {
+    "name": "Bojangles",
+    "menu_url": "https://www.bojangles.com/menu",
+    "nutrition_url": "https://www.bojangles.com/nutrition"
+  },
+  {
+    "name": "Raising Cane's",
+    "menu_url": "https://www.raisingcanes.com/menu",
+    "nutrition_url": "https://www.raisingcanes.com/nutrition/"
+  },
+  {
+    "name": "Jimmy John's",
+    "menu_url": "https://www.jimmyjohns.com/menu",
+    "nutrition_url": "https://www.jimmyjohns.com/menu/nutritional-info/"
+  },
+  {
+    "name": "Jersey Mike's",
+    "menu_url": "https://www.jerseymikes.com/menu",
+    "nutrition_url": "https://www.jerseymikes.com/nutrition"
+  },
+  {
+    "name": "Firehouse Subs",
+    "menu_url": "https://www.firehousesubs.com/menu",
+    "nutrition_url": "https://www.firehousesubs.com/nutrition"
+  },
+  {
+    "name": "Panera Bread Cafe",
+    "menu_url": "https://www.panerabread.com/menu",
+    "nutrition_url": "https://www.panerabread.com/en-us/nutrition-info.html"
+  },
+  {
+    "name": "Qdoba",
+    "menu_url": "https://www.qdoba.com/menu",
+    "nutrition_url": "https://www.qdoba.com/nutrition"
+  },
+  {
+    "name": "Moe's Southwest Grill",
+    "menu_url": "https://www.moes.com/menu",
+    "nutrition_url": "https://www.moes.com/nutrition/"
+  },
+  {
+    "name": "Del Taco",
+    "menu_url": "https://www.deltaco.com/menu",
+    "nutrition_url": "https://www.deltaco.com/nutrition"
+  },
+  {
+    "name": "El Pollo Loco",
+    "menu_url": "https://www.elpolloloco.com/menu",
+    "nutrition_url": "https://www.elpolloloco.com/nutrition/"
+  },
+  {
+    "name": "Church's Chicken",
+    "menu_url": "https://www.churchs.com/menu",
+    "nutrition_url": "https://www.churchs.com/menu/nutrition"
+  },
+  {
+    "name": "Long John Silver's",
+    "menu_url": "https://www.ljsilvers.com/menu",
+    "nutrition_url": "https://www.ljsilvers.com/nutrition"
+  },
+  {
+    "name": "Captain D's",
+    "menu_url": "https://www.captainds.com/menu",
+    "nutrition_url": "https://www.captainds.com/nutrition"
+  },
+  {
+    "name": "Krystal",
+    "menu_url": "https://krystal.com/menu",
+    "nutrition_url": "https://krystal.com/nutrition/"
+  },
+  {
+    "name": "Steak 'n Shake",
+    "menu_url": "https://www.steaknshake.com/menu",
+    "nutrition_url": "https://www.steaknshake.com/nutrition"
+  },
+  {
+    "name": "A&W Restaurants",
+    "menu_url": "https://awrestaurants.com/menu",
+    "nutrition_url": "https://awrestaurants.com/nutrition"
+  },
+  {
+    "name": "Checkers & Rally's",
+    "menu_url": "https://www.checkers.com/menu",
+    "nutrition_url": "https://www.checkers.com/nutrition/"
+  },
+  {
+    "name": "Baskin-Robbins",
+    "menu_url": "https://www.baskinrobbins.com/menu",
+    "nutrition_url": "https://www.baskinrobbins.com/en/menu/nutrition-info"
+  },
+  {
+    "name": "Cold Stone Creamery",
+    "menu_url": "https://www.coldstonecreamery.com/menu",
+    "nutrition_url": "https://www.coldstonecreamery.com/nutrition/"
+  },
+  {
+    "name": "Krispy Kreme",
+    "menu_url": "https://www.krispykreme.com/menu",
+    "nutrition_url": "https://www.krispykreme.com/nutrition"
+  },
+  {
+    "name": "Auntie Anne's",
+    "menu_url": "https://www.auntieannes.com/menu",
+    "nutrition_url": "https://www.auntieannes.com/nutrition"
+  },
+  {
+    "name": "Cinnabon",
+    "menu_url": "https://www.cinnabon.com/menu",
+    "nutrition_url": "https://www.cinnabon.com/nutrition"
+  },
+  {
+    "name": "Jamba Juice",
+    "menu_url": "https://www.jamba.com/menu",
+    "nutrition_url": "https://www.jamba.com/nutrition"
+  },
+  {
+    "name": "Smoothie King",
+    "menu_url": "https://www.smoothieking.com/menu",
+    "nutrition_url": "https://www.smoothieking.com/nutrition"
+  },
+  {
+    "name": "Tropical Smoothie Cafe",
+    "menu_url": "https://www.tropicalsmoothiecafe.com/menu",
+    "nutrition_url": "https://www.tropicalsmoothiecafe.com/menu/nutrition"
+  },
+  {
+    "name": "Caribou Coffee",
+    "menu_url": "https://www.cariboucoffee.com/menu",
+    "nutrition_url": "https://www.cariboucoffee.com/nutrition/"
+  },
+  {
+    "name": "Peet's Coffee",
+    "menu_url": "https://www.peets.com/menu",
+    "nutrition_url": "https://www.peets.com/pages/nutritional-info"
+  },
+  {
+    "name": "Tim Hortons",
+    "menu_url": "https://www.timhortons.com/menu",
+    "nutrition_url": "https://www.timhortons.com/us/en/menu/nutrition.html"
+  },
+  {
+    "name": "IHOP",
+    "menu_url": "https://www.ihop.com/menu",
+    "nutrition_url": "https://www.ihop.com/en/nutrition"
+  },
+  {
+    "name": "Denny's",
+    "menu_url": "https://www.dennys.com/menu",
+    "nutrition_url": "https://www.dennys.com/nutrition/"
+  },
+  {
+    "name": "Waffle House",
+    "menu_url": "https://www.wafflehouse.com/menu",
+    "nutrition_url": "https://www.wafflehouse.com/menu/nutrition-guide/"
+  },
+  {
+    "name": "Cracker Barrel",
+    "menu_url": "https://www.crackerbarrel.com/menu",
+    "nutrition_url": "https://www.crackerbarrel.com/Nutrition"
+  },
+  {
+    "name": "Applebee's",
+    "menu_url": "https://www.applebees.com/menu",
+    "nutrition_url": "https://www.applebees.com/en/nutrition"
+  },
+  {
+    "name": "Chili's",
+    "menu_url": "https://www.chilis.com/menu",
+    "nutrition_url": "https://www.chilis.com/nutrition"
+  },
+  {
+    "name": "TGI Fridays",
+    "menu_url": "https://www.tgifridays.com/menu",
+    "nutrition_url": "https://www.tgifridays.com/nutrition/"
+  },
+  {
+    "name": "Olive Garden",
+    "menu_url": "https://www.olivegarden.com/menu",
+    "nutrition_url": "https://www.olivegarden.com/nutrition"
+  },
+  {
+    "name": "Red Lobster",
+    "menu_url": "https://www.redlobster.com/menu",
+    "nutrition_url": "https://www.redlobster.com/nutrition"
+  },
+  {
+    "name": "Outback Steakhouse",
+    "menu_url": "https://www.outback.com/menu",
+    "nutrition_url": "https://www.outback.com/nutrition"
+  },
+  {
+    "name": "Texas Roadhouse",
+    "menu_url": "https://www.texasroadhouse.com/menu",
+    "nutrition_url": "https://www.texasroadhouse.com/menus/nutrition"
+  },
+  {
+    "name": "LongHorn Steakhouse",
+    "menu_url": "https://www.longhornsteakhouse.com/menu",
+    "nutrition_url": "https://www.longhornsteakhouse.com/nutrition"
+  },
+  {
+    "name": "Buffalo Wild Wings",
+    "menu_url": "https://www.buffalowildwings.com/menu",
+    "nutrition_url": "https://www.buffalowildwings.com/en/nutrition/"
+  },
+  {
+    "name": "Cheesecake Factory",
+    "menu_url": "https://www.thecheesecakefactory.com/menu",
+    "nutrition_url": "https://www.thecheesecakefactory.com/nutrition/"
+  },
+  {
+    "name": "Red Robin",
+    "menu_url": "https://www.redrobin.com/menu",
+    "nutrition_url": "https://www.redrobin.com/pages/nutrition"
+  },
+  {
+    "name": "P.F. Chang's",
+    "menu_url": "https://www.pfchangs.com/menu",
+    "nutrition_url": "https://www.pfchangs.com/nutrition.html"
+  },
+  {
+    "name": "Ruby Tuesday",
+    "menu_url": "https://www.rubytuesday.com/menu",
+    "nutrition_url": "https://www.rubytuesday.com/nutrition/"
+  },
+  {
+    "name": "Bob Evans",
+    "menu_url": "https://www.bobevans.com/menu",
+    "nutrition_url": "https://www.bobevans.com/menu/nutrition"
+  },
+  {
+    "name": "Perkins Restaurant & Bakery",
+    "menu_url": "https://www.perkinsrestaurants.com/menu",
+    "nutrition_url": "https://www.perkinsrestaurants.com/nutrition/"
+  },
+  {
+    "name": "Golden Corral",
+    "menu_url": "https://www.goldencorral.com/menu",
+    "nutrition_url": "https://www.goldencorral.com/menu/nutrition/"
+  },
+  {
+    "name": "Boston Market",
+    "menu_url": "https://www.bostonmarket.com/menu",
+    "nutrition_url": "https://www.bostonmarket.com/nutrition/"
+  },
+  {
+    "name": "Sonic",
+    "menu_url": "https://www.sonicdrivein.com/menu",
+    "nutrition_url": "https://www.sonicdrivein.com/menu/nutrition"
+  },
+  {
+    "name": "Freddy's Frozen Custard & Steakburgers",
+    "menu_url": "https://freddys.com/menu",
+    "nutrition_url": "https://freddys.com/nutrition/"
+  },
+  {
+    "name": "Fazoli's",
+    "menu_url": "https://www.fazolis.com/menu",
+    "nutrition_url": "https://www.fazolis.com/nutrition"
+  },
+  {
+    "name": "Noodles & Company",
+    "menu_url": "https://www.noodles.com/menu",
+    "nutrition_url": "https://www.noodles.com/menu/nutrition/"
+  },
+  {
+    "name": "CAVA",
+    "menu_url": "https://cava.com/menu",
+    "nutrition_url": "https://cava.com/pages/nutrition-calculator"
+  },
+  {
+    "name": "Sweetgreen",
+    "menu_url": "https://www.sweetgreen.com/menu",
+    "nutrition_url": "https://www.sweetgreen.com/nutrition"
+  },
+  {
+    "name": "&pizza",
+    "menu_url": "https://andpizza.com/menu",
+    "nutrition_url": "https://andpizza.com/nutrition"
+  },
+  {
+    "name": "Blaze Pizza",
+    "menu_url": "https://blazepizza.com/menu",
+    "nutrition_url": "https://blazepizza.com/nutrition/"
+  },
+  {
+    "name": "MOD Pizza",
+    "menu_url": "https://www.modpizza.com/menu",
+    "nutrition_url": "https://www.modpizza.com/nutrition"
+  },
+  {
+    "name": "Marco's Pizza",
+    "menu_url": "https://www.marcos.com/menu",
+    "nutrition_url": "https://www.marcos.com/nutrition"
+  },
+  {
+    "name": "Papa Murphy's",
+    "menu_url": "https://www.papamurphys.com/menu",
+    "nutrition_url": "https://www.papamurphys.com/menu/nutrition"
+  },
+  {
+    "name": "California Pizza Kitchen",
+    "menu_url": "https://www.cpk.com/menu",
+    "nutrition_url": "https://www.cpk.com/nutrition"
+  },
+  {
+    "name": "IHOP Restaurants",
+    "menu_url": "https://www.ihop.com/menu",
+    "nutrition_url": "https://www.ihop.com/en/nutrition"
+  },
+  {
+    "name": "Village Inn",
+    "menu_url": "https://villageinn.com/menu",
+    "nutrition_url": "https://villageinn.com/nutrition/"
+  },
+  {
+    "name": "Einstein Bros. Bagels",
+    "menu_url": "https://www.einsteinbros.com/menu",
+    "nutrition_url": "https://www.einsteinbros.com/nutrition"
+  },
+  {
+    "name": "Corner Bakery Cafe",
+    "menu_url": "https://www.cornerbakerycafe.com/menu",
+    "nutrition_url": "https://www.cornerbakerycafe.com/nutrition/"
+  },
+  {
+    "name": "Au Bon Pain",
+    "menu_url": "https://www.aubonpain.com/menu",
+    "nutrition_url": "https://www.aubonpain.com/nutrition"
+  },
+  {
+    "name": "McAlister's Deli",
+    "menu_url": "https://www.mcalistersdeli.com/menu",
+    "nutrition_url": "https://www.mcalistersdeli.com/nutrition"
+  },
+  {
+    "name": "Potbelly Sandwich Shop",
+    "menu_url": "https://www.potbelly.com/menu",
+    "nutrition_url": "https://www.potbelly.com/nutrition"
+  },
+  {
+    "name": "Wienerschnitzel",
+    "menu_url": "https://www.wienerschnitzel.com/menu",
+    "nutrition_url": "https://www.wienerschnitzel.com/nutrition/"
+  }
+]

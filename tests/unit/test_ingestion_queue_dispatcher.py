@@ -39,7 +39,11 @@ class _NonClosingSessionCtx:
 
 
 def _item(name: str) -> IngestionQueueItemInput:
-    return IngestionQueueItemInput(name=name, official_url="https://example-restaurant.com")
+    return IngestionQueueItemInput(
+        name=name,
+        menu_url="https://example-restaurant.com/menu",
+        nutrition_url="https://example-restaurant.com/nutrition",
+    )
 
 
 class TestDispatchOneCycle:

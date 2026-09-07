@@ -60,6 +60,7 @@ class CrawlerService:
                 domain_verifier=self._domain_verifier,
                 domain_lock=self._domain_lock,
                 user_agent=self._settings.crawler_user_agent,
+                flaresolverr_url=self._settings.flaresolverr_url or None,
             ) as fetcher:
                 result = await fetcher.fetch(url)
 

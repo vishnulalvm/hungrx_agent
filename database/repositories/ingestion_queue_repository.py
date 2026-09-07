@@ -47,11 +47,8 @@ class IngestionQueueRepository:
             record = IngestionQueueItem(
                 batch_id=batch_id,
                 name=item.name,
-                official_url=item.official_url,
-                city=item.city,
-                state=item.state,
-                country=item.country,
-                phone=item.phone,
+                menu_url=item.menu_url,
+                nutrition_url=item.nutrition_url,
                 status=IngestionQueueStatus.QUEUED,
                 created_by_user_id=created_by_user_id,
             )

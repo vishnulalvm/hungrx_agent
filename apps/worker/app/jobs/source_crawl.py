@@ -38,7 +38,7 @@ async def _crawl_and_store(*, source_id: str, source_url: str) -> dict[str, Any]
     also triggering this job's own `_run`'s enqueue of a *second*,
     separately-scheduled collector_workflow RQ job for the same
     restaurant — which would be both redundant and broken (that separately
-    enqueued job has no restaurant_name/official_url to work with, since
+    enqueued job has no restaurant_name/menu_url to work with, since
     those only exist as the dispatcher's own in-memory locals)."""
     import uuid
 

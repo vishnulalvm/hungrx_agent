@@ -4,7 +4,7 @@ no Source Authority search).
 Sibling to apps/worker/app/jobs/restaurant_ingestion.py, not a
 modification of it — that job's whole purpose is search-based resolution
 via SourceAuthorityService; this one skips search entirely and instead
-validates+persists the admin-supplied official_url directly (see
+validates+persists the admin-supplied menu_url directly (see
 apps/api/app/services/manual_source_verification.py). On success,
 enqueues a source_crawl job exactly like restaurant_ingestion.py does —
 that job and everything downstream of it are reused unmodified.
@@ -32,7 +32,7 @@ from infrastructure.queue.redis_connection import get_redis_connection
 JOB_TYPE = "restaurant_ingestion"
 
 
-async def _verify_only(*, restaurant_seed_id: str, official_url: str) -> dict[str, Any]:
+async def _verify_only(*, restaurant_seed_id: str, menu_url: str) -> dict[str, Any]:
     """The verification-only half of this job — validate+persist the
     Source, no side effect of enqueueing anything further. Factored out
     so apps/worker/app/jobs/ingestion_queue_dispatcher.py can call just
@@ -51,7 +51,7 @@ async def _verify_only(*, restaurant_seed_id: str, official_url: str) -> dict[st
     async with session_factory() as session:
         try:
             source = await verify_and_persist_manual_source(
-                session, restaurant_id=restaurant_id, raw_url=official_url
+                session, restaurant_id=restaurant_id, raw_url=menu_url
             )
         except ManualSourceRejectedError as exc:
             await session.commit()
@@ -70,13 +70,13 @@ async def _run(
     *,
     restaurant_seed_id: str,
     name: str,
-    official_url: str,
+    menu_url: str,
     city: str | None,
     state: str | None,
     country: str | None,
     phone: str | None,
 ) -> dict[str, Any]:
-    verify_outcome = await _verify_only(restaurant_seed_id=restaurant_seed_id, official_url=official_url)
+    verify_outcome = await _verify_only(restaurant_seed_id=restaurant_seed_id, menu_url=menu_url)
     if verify_outcome["status"] != "verified":
         return verify_outcome
 
@@ -107,7 +107,7 @@ def run_manual_restaurant_ingestion(
     *,
     restaurant_seed_id: str,
     name: str,
-    official_url: str,
+    menu_url: str,
     city: str | None = None,
     state: str | None = None,
     country: str | None = None,
@@ -129,7 +129,7 @@ def run_manual_restaurant_ingestion(
                 _run,
                 restaurant_seed_id=restaurant_seed_id,
                 name=name,
-                official_url=official_url,
+                menu_url=menu_url,
                 city=city,
                 state=state,
                 country=country,

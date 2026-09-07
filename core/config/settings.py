@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # --- Crawler ---
     playwright_headless: bool = True
     crawler_user_agent: str = "hungrx-crawler/1.0"
+    # Base URL of a FlareSolverr instance (see docker-compose.yml's
+    # `flaresolverr` service). Empty disables the fallback entirely —
+    # HttpFetcher.fetch() then behaves exactly as before.
+    flaresolverr_url: str = ""
 
     # --- Storage ---
     storage_backend: str = "local"

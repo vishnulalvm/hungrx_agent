@@ -106,7 +106,7 @@ async def _run_one_item(item_id: uuid.UUID) -> dict[str, Any]:
     # callers), which here would race a second, independently-scheduled
     # copy of this same restaurant's pipeline against the one this
     # function already drives inline — and that second copy would be
-    # missing restaurant_name/official_url entirely, since those only
+    # missing restaurant_name/menu_url entirely, since those only
     # exist as this function's own local variables, not on anything a
     # separately enqueued job receives.
     from apps.worker.app.jobs.collector_workflow import _run as run_collector_workflow_inline
@@ -120,8 +120,7 @@ async def _run_one_item(item_id: uuid.UUID) -> dict[str, Any]:
         item = await IngestionQueueRepository(session).get_by_id(item_id)
         if item is None:
             raise ValueError(f"ingestion queue item {item_id} not found")
-        name, official_url = item.name, item.official_url
-        city, state, country, phone = item.city, item.state, item.country, item.phone
+        name, menu_url, nutrition_url = item.name, item.menu_url, item.nutrition_url
         await session.commit()
 
     restaurant_seed_id = str(uuid.uuid4())
@@ -132,7 +131,7 @@ async def _run_one_item(item_id: uuid.UUID) -> dict[str, Any]:
         await session.commit()
 
     ingestion_outcome = await verify_source_inline(
-        restaurant_seed_id=restaurant_seed_id, official_url=official_url
+        restaurant_seed_id=restaurant_seed_id, menu_url=menu_url
     )
     if ingestion_outcome["status"] != "verified":
         raise RuntimeError(f"source verification rejected: {ingestion_outcome.get('reason')}")
@@ -146,11 +145,8 @@ async def _run_one_item(item_id: uuid.UUID) -> dict[str, Any]:
     collector_outcome = await run_collector_workflow_inline(
         restaurant_id=restaurant_id,
         restaurant_name=name,
-        city=city,
-        state=state,
-        country=country,
-        phone=phone,
-        official_url=official_url,
+        menu_url=menu_url,
+        nutrition_url=nutrition_url,
     )
 
     return {

@@ -133,11 +133,8 @@ export type IngestionQueueStatus = "queued" | "running" | "succeeded" | "failed"
 
 export interface IngestionQueueItemInput {
   name: string;
-  official_url: string;
-  city?: string | null;
-  state?: string | null;
-  country?: string | null;
-  phone?: string | null;
+  menu_url: string;
+  nutrition_url: string;
 }
 
 export interface IngestionQueueBulkUploadRequest {
@@ -148,11 +145,8 @@ export interface IngestionQueueItemSummary {
   id: string;
   batch_id: string;
   name: string;
-  official_url: string;
-  city: string | null;
-  state: string | null;
-  country: string | null;
-  phone: string | null;
+  menu_url: string;
+  nutrition_url: string;
   status: IngestionQueueStatus;
   restaurant_seed_id: string | null;
   error_message: string | null;
@@ -169,11 +163,8 @@ export interface IngestionQueueBulkUploadResult {
 
 export interface IngestionQueueItemEditRequest {
   name?: string | null;
-  official_url?: string | null;
-  city?: string | null;
-  state?: string | null;
-  country?: string | null;
-  phone?: string | null;
+  menu_url?: string | null;
+  nutrition_url?: string | null;
 }
 
 // core/schemas/proposed_change.py
@@ -188,6 +179,7 @@ export interface ReviewSummary {
   entity_type: ProposedChangeEntityType;
   entity_id: string;
   status: ProposedChangeStatus;
+  name: string | null;
   agent_run_id: string | null;
   created_at: string;
 }
@@ -197,6 +189,7 @@ export interface ReviewDetail {
   entity_type: ProposedChangeEntityType;
   entity_id: string;
   status: ProposedChangeStatus;
+  name: string | null;
   structured_json: Record<string, unknown>;
   validation_result: {
     is_valid: boolean;

@@ -208,6 +208,61 @@ class TestReturnsSourceReferencesOnly:
             assert isinstance(snapshot, SourceSnapshot)
 
 
+class TestExplicitNutritionUrl:
+    async def test_fetches_nutrition_url_directly_without_link_discovery(self, db_session) -> None:
+        source = _source()
+        fetcher = FakePageFetcher(
+            pages={
+                "https://joes-pizza.com/menu": (SnapshotContentType.HTML, _RICH_HTML),
+                "https://joes-pizza.com/nutrition-facts": (SnapshotContentType.HTML, "<html>nutrition</html>"),
+            },
+            source_id=source.id,
+        )
+        node = build_extraction_node(
+            db_session, storage=None, settings=None, page_fetcher_factory=lambda domain: fetcher
+        )
+
+        update = await node(
+            {
+                "source": source,
+                "source_url": "https://joes-pizza.com/menu",
+                "nutrition_url": "https://joes-pizza.com/nutrition-facts",
+            }
+        )
+
+        assert "errors" not in update
+        assert fetcher.html_or_pdf_calls == [
+            "https://joes-pizza.com/menu",
+            "https://joes-pizza.com/nutrition-facts",
+        ]
+        # Link discovery is skipped entirely — the rich HTML's /menu and
+        # /about links are never fetched once an explicit nutrition_url
+        # is supplied.
+        assert "https://joes-pizza.com/menu" == fetcher.html_or_pdf_calls[0]
+        assert len(fetcher.html_or_pdf_calls) == 2
+
+    async def test_rejects_nutrition_url_outside_verified_domain(self, db_session) -> None:
+        source = _source()
+        fetcher = FakePageFetcher(
+            pages={"https://joes-pizza.com/menu": (SnapshotContentType.HTML, _RICH_HTML)},
+            source_id=source.id,
+        )
+        node = build_extraction_node(
+            db_session, storage=None, settings=None, page_fetcher_factory=lambda domain: fetcher
+        )
+
+        update = await node(
+            {
+                "source": source,
+                "source_url": "https://joes-pizza.com/menu",
+                "nutrition_url": "https://evil.example.com/nutrition",
+            }
+        )
+
+        assert len(update["errors"]) == 1
+        assert "evil.example.com" not in fetcher.html_or_pdf_calls
+
+
 class TestFailsClosedWithoutVerifiedSource:
     async def test_missing_source_on_state_reports_an_error(self, db_session) -> None:
         node = build_extraction_node(db_session, storage=None, settings=None)

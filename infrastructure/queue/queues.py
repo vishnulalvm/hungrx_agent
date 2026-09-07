@@ -19,6 +19,7 @@ QUEUE_SOURCE_CRAWL = "source_crawl"
 QUEUE_COLLECTOR_WORKFLOW = "collector_workflow"
 QUEUE_MAINTENANCE_POLLING = "maintenance_polling"
 QUEUE_REVIEWER_WORKFLOW = "reviewer_workflow"
+QUEUE_INGESTION_QUEUE_DISPATCH = "ingestion_queue_dispatch"
 
 ALL_QUEUE_NAMES = [
     QUEUE_RESTAURANT_INGESTION,
@@ -26,6 +27,7 @@ ALL_QUEUE_NAMES = [
     QUEUE_COLLECTOR_WORKFLOW,
     QUEUE_MAINTENANCE_POLLING,
     QUEUE_REVIEWER_WORKFLOW,
+    QUEUE_INGESTION_QUEUE_DISPATCH,
 ]
 
 # 3 attempts total (1 original + 2 retries), backing off 30s / 120s so a

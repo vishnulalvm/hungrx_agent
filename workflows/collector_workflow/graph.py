@@ -16,6 +16,22 @@ from a real resumed decision, never a default — routes to Publish. Every
 other outcome ends the run with nothing written to the production
 restaurant/menu/dish tables.
 
+Every node before Human Review is also conditionally routed on
+`state["errors"]`: source_authority, extraction, multimodal_translation,
+and deterministic_validation each report a failure by returning
+`{"errors": [...]}` (accumulated via CollectorState.errors's operator.add
+reducer) rather than raising — the graph's own topology previously routed
+unconditionally onward regardless, so e.g. a failed extraction (no
+source material captured) would still run multimodal_translation,
+deterministic_validation, and human_review, each logging its own
+"precondition not met" error and human_review pausing anyway with an
+empty/garbage ProposedChange for an admin to review as if it were a
+legitimate "nothing found" result. `_route_if_no_errors` below sends the
+run straight to END the moment `errors` is non-empty instead — the
+already-recorded AgentRun.mark_failed call (each node's own failure
+branch) is the authoritative failure signal; no misleading pending
+review gets created for a run that never actually produced real data.
+
 Because Source Authority needs a live DB session/EntityResolutionProvider,
 Extraction needs a live DB session/StorageAdapter/Settings, Multimodal
 Translation needs a live DB session/StorageAdapter/AIProvider, and the
@@ -24,6 +40,8 @@ requests (see infrastructure/checkpointer.py), `build_graph` requires all
 of them — a graph is scoped to one run's dependencies plus its
 persistence backend, not a process-wide singleton.
 """
+
+from typing import Callable
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
@@ -51,6 +69,22 @@ NODE_MULTIMODAL_TRANSLATION = "multimodal_translation"
 NODE_DETERMINISTIC_VALIDATION = "deterministic_validation"
 NODE_HUMAN_REVIEW = "human_review"
 NODE_PUBLISH = "publish"
+
+
+def _route_if_no_errors(next_node: str) -> Callable[[CollectorState], str]:
+    """Returns a conditional-edge routing function: continues to
+    `next_node` while `state["errors"]` is still empty, otherwise ends the
+    run. Used after every node from source_authority through
+    deterministic_validation — see the module docstring for why an
+    accumulated error must stop the run rather than let every remaining
+    node execute uselessly against preconditions it already can't meet."""
+
+    def _route(state: CollectorState) -> str:
+        if state.get("errors"):
+            return END
+        return next_node
+
+    return _route
 
 
 def _route_after_human_review(state: CollectorState) -> str:
@@ -102,10 +136,26 @@ def build_graph(
     graph.add_node(NODE_PUBLISH, build_publish_node(session))
 
     graph.add_edge(START, NODE_SOURCE_AUTHORITY)
-    graph.add_edge(NODE_SOURCE_AUTHORITY, NODE_EXTRACTION)
-    graph.add_edge(NODE_EXTRACTION, NODE_MULTIMODAL_TRANSLATION)
-    graph.add_edge(NODE_MULTIMODAL_TRANSLATION, NODE_DETERMINISTIC_VALIDATION)
-    graph.add_edge(NODE_DETERMINISTIC_VALIDATION, NODE_HUMAN_REVIEW)
+    graph.add_conditional_edges(
+        NODE_SOURCE_AUTHORITY,
+        _route_if_no_errors(NODE_EXTRACTION),
+        {NODE_EXTRACTION: NODE_EXTRACTION, END: END},
+    )
+    graph.add_conditional_edges(
+        NODE_EXTRACTION,
+        _route_if_no_errors(NODE_MULTIMODAL_TRANSLATION),
+        {NODE_MULTIMODAL_TRANSLATION: NODE_MULTIMODAL_TRANSLATION, END: END},
+    )
+    graph.add_conditional_edges(
+        NODE_MULTIMODAL_TRANSLATION,
+        _route_if_no_errors(NODE_DETERMINISTIC_VALIDATION),
+        {NODE_DETERMINISTIC_VALIDATION: NODE_DETERMINISTIC_VALIDATION, END: END},
+    )
+    graph.add_conditional_edges(
+        NODE_DETERMINISTIC_VALIDATION,
+        _route_if_no_errors(NODE_HUMAN_REVIEW),
+        {NODE_HUMAN_REVIEW: NODE_HUMAN_REVIEW, END: END},
+    )
     graph.add_conditional_edges(
         NODE_HUMAN_REVIEW, _route_after_human_review, {NODE_PUBLISH: NODE_PUBLISH, END: END}
     )

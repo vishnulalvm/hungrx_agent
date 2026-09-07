@@ -13,12 +13,19 @@ from apps.api.app.dependencies.auth import CurrentUserDep, require_permission
 from apps.api.app.dependencies.db import DbSessionDep
 from apps.api.app.dependencies.pagination import PaginationDep
 from apps.api.app.dependencies.review import ReviewServiceDep
-from core.config.exceptions import NotFoundError
+from core.config.exceptions import ConflictError, NotFoundError
 from core.schemas.audit import AuditAction, AuditEntityType
 from core.schemas.audit_log import AuditLogEntry
 from core.schemas.auth import Permission
 from core.schemas.common import PaginatedResponse
 from core.schemas.ingestion import IngestionTriggerRequest, IngestionTriggerResult
+from core.schemas.ingestion_queue import (
+    IngestionQueueBulkUploadRequest,
+    IngestionQueueBulkUploadResult,
+    IngestionQueueItemEditRequest,
+    IngestionQueueItemSummary,
+    IngestionQueueStatus,
+)
 from core.schemas.restaurant import Restaurant, RestaurantSummary
 from core.schemas.review import (
     ReviewActionResult,
@@ -29,6 +36,10 @@ from core.schemas.review import (
 )
 from core.schemas.user import UserPublic
 from database.repositories.audit_log_repository import AuditLogRepository
+from database.repositories.ingestion_queue_repository import (
+    InvalidQueueStateError,
+    IngestionQueueRepository,
+)
 from database.repositories.restaurant_repository import RestaurantRepository
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -222,6 +233,174 @@ async def trigger_ingestion(
     )
     await db.commit()
     return IngestionTriggerResult(job_id=job_id, restaurant_seed_id=restaurant_seed_id)
+
+
+# --- Manual/verified ingestion queue: a separate path from the search-
+# based /ingestion/trigger above. The admin already knows the restaurant's
+# official URL (a bulk-verified list), so there's nothing to search for —
+# apps/api/app/services/manual_source_verification.py still validates the
+# supplied URL (aggregator blocklist, domain checks) before trusting it.
+# Restaurants are processed strictly one at a time by
+# apps/worker/app/jobs/ingestion_queue_dispatcher.py; see
+# database/repositories/ingestion_queue_repository.py for the QUEUED-only
+# edit/delete guarantee this router just surfaces as 409s. ---
+@router.post(
+    "/ingestion-queue/upload",
+    response_model=IngestionQueueBulkUploadResult,
+    dependencies=[require_permission(Permission.INGESTION_TRIGGER)],
+)
+async def upload_ingestion_queue_batch(
+    payload: IngestionQueueBulkUploadRequest, user: CurrentUserDep, db: DbSessionDep, audit: AuditServiceDep
+) -> IngestionQueueBulkUploadResult:
+    from fastapi.concurrency import run_in_threadpool
+
+    from apps.worker.app.jobs.ingestion_queue_dispatcher import try_trigger_dispatch
+
+    result = await IngestionQueueRepository(db).create_batch(
+        items=payload.items, created_by_user_id=user.id
+    )
+
+    await audit.log(
+        action=AuditAction.AGENT_RUN_TRIGGER,
+        entity_type=AuditEntityType.AGENT_RUN,
+        entity_id=str(result.batch_id),
+        actor=user,
+        metadata={
+            "batch_id": str(result.batch_id),
+            "queued_count": len(result.created),
+            "skipped_duplicate_names": result.skipped_duplicate_names,
+        },
+    )
+    await db.commit()
+
+    if result.created:
+        await run_in_threadpool(try_trigger_dispatch)
+
+    return IngestionQueueBulkUploadResult(
+        batch_id=result.batch_id,
+        queued_count=len(result.created),
+        skipped_duplicate_names=result.skipped_duplicate_names,
+        items=[IngestionQueueItemSummary.model_validate(item) for item in result.created],
+    )
+
+
+@router.get(
+    "/ingestion-queue",
+    response_model=PaginatedResponse[IngestionQueueItemSummary],
+    dependencies=[require_permission(Permission.INGESTION_READ)],
+)
+async def list_ingestion_queue(
+    db: DbSessionDep, pagination: PaginationDep, status: IngestionQueueStatus | None = None
+) -> PaginatedResponse[IngestionQueueItemSummary]:
+    items, total = await IngestionQueueRepository(db).list_paginated(
+        page=pagination.page, page_size=pagination.page_size, status=status
+    )
+    return PaginatedResponse(
+        items=[IngestionQueueItemSummary.model_validate(item) for item in items],
+        page=pagination.page,
+        page_size=pagination.page_size,
+        total=total,
+    )
+
+
+@router.get(
+    "/ingestion-queue/{item_id}",
+    response_model=IngestionQueueItemSummary,
+    dependencies=[require_permission(Permission.INGESTION_READ)],
+)
+async def get_ingestion_queue_item(item_id: uuid.UUID, db: DbSessionDep) -> IngestionQueueItemSummary:
+    item = await IngestionQueueRepository(db).get_by_id(item_id)
+    if item is None:
+        raise NotFoundError(f"No ingestion queue item with id {item_id}")
+    return IngestionQueueItemSummary.model_validate(item)
+
+
+@router.patch(
+    "/ingestion-queue/{item_id}",
+    response_model=IngestionQueueItemSummary,
+    dependencies=[require_permission(Permission.INGESTION_TRIGGER)],
+)
+async def update_ingestion_queue_item(
+    item_id: uuid.UUID,
+    payload: IngestionQueueItemEditRequest,
+    user: CurrentUserDep,
+    db: DbSessionDep,
+    audit: AuditServiceDep,
+) -> IngestionQueueItemSummary:
+    try:
+        item = await IngestionQueueRepository(db).update_if_queued(
+            item_id,
+            name=payload.name,
+            official_url=payload.official_url,
+            city=payload.city,
+            state=payload.state,
+            country=payload.country,
+            phone=payload.phone,
+        )
+    except InvalidQueueStateError as exc:
+        raise ConflictError(str(exc)) from exc
+
+    await audit.log(
+        action=AuditAction.AGENT_RUN_TRIGGER,
+        entity_type=AuditEntityType.AGENT_RUN,
+        entity_id=str(item_id),
+        actor=user,
+        metadata={"action": "ingestion_queue_item.edit"},
+    )
+    await db.commit()
+    return IngestionQueueItemSummary.model_validate(item)
+
+
+@router.delete(
+    "/ingestion-queue/{item_id}",
+    status_code=204,
+    dependencies=[require_permission(Permission.INGESTION_TRIGGER)],
+)
+async def delete_ingestion_queue_item(
+    item_id: uuid.UUID, user: CurrentUserDep, db: DbSessionDep, audit: AuditServiceDep
+) -> None:
+    try:
+        await IngestionQueueRepository(db).delete_if_queued(item_id)
+    except InvalidQueueStateError as exc:
+        raise ConflictError(str(exc)) from exc
+
+    await audit.log(
+        action=AuditAction.AGENT_RUN_TRIGGER,
+        entity_type=AuditEntityType.AGENT_RUN,
+        entity_id=str(item_id),
+        actor=user,
+        metadata={"action": "ingestion_queue_item.delete"},
+    )
+    await db.commit()
+
+
+@router.post(
+    "/ingestion-queue/{item_id}/requeue",
+    response_model=IngestionQueueItemSummary,
+    dependencies=[require_permission(Permission.INGESTION_TRIGGER)],
+)
+async def requeue_ingestion_queue_item(
+    item_id: uuid.UUID, user: CurrentUserDep, db: DbSessionDep, audit: AuditServiceDep
+) -> IngestionQueueItemSummary:
+    from fastapi.concurrency import run_in_threadpool
+
+    from apps.worker.app.jobs.ingestion_queue_dispatcher import try_trigger_dispatch
+
+    try:
+        item = await IngestionQueueRepository(db).requeue_if_failed(item_id)
+    except InvalidQueueStateError as exc:
+        raise ConflictError(str(exc)) from exc
+
+    await audit.log(
+        action=AuditAction.AGENT_RUN_TRIGGER,
+        entity_type=AuditEntityType.AGENT_RUN,
+        entity_id=str(item_id),
+        actor=user,
+        metadata={"action": "ingestion_queue_item.requeue"},
+    )
+    await db.commit()
+    await run_in_threadpool(try_trigger_dispatch)
+    return IngestionQueueItemSummary.model_validate(item)
 
 
 # --- read-only tier available to any role holding AUDIT_LOG_READ ---

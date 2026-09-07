@@ -34,6 +34,7 @@ from apps.api.app.services.audit_service import AuditService
 from apps.api.app.services.source_authority_service import SourceAuthorityService
 from core.schemas.agent_run import AgentWorkflowType
 from core.schemas.audit import AuditAction, AuditEntityType
+from core.schemas.source import Source as SourceSchema
 from core.schemas.source_authority import EntityResolutionQuery, ResolutionStatus
 from database.repositories.agent_run_repository import AgentRunRepository
 from database.repositories.source_repository import SourceRepository
@@ -99,7 +100,12 @@ def build_source_authority_node(
             # it were.
             source_record = await SourceRepository(session).get_by_id(result.source_id)
             update["source_url"] = result.resolved_url
-            update["source"] = source_record
+            # CollectorState.source is typed as core.schemas.source.Source
+            # (the Pydantic domain schema, msgpack-serializable for the
+            # LangGraph checkpointer) — SourceRepository returns the SQLAlchemy
+            # ORM row, which is not serializable and must never be put on
+            # state directly.
+            update["source"] = SourceSchema.model_validate(source_record, from_attributes=True)
             return update
 
         failure_message = (

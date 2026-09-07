@@ -37,3 +37,4 @@ build/
 # Playwright
 test-results/
 playwright-report/
+.local_backups/

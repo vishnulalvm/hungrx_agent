@@ -9,10 +9,15 @@ Responsibilities (per the collector workflow's Agent 3 spec):
     sent to AIProvider is built exclusively from state["source_snapshots"]
     (via StorageAdapter) — no restaurant identity, no database rows, no
     unrelated context is ever included
-  - strict structured output: AIProvider.generate_structured is called
-    with response_model=ExtractionOutput, OpenAI's json_schema strict
-    mode (see infrastructure/ai/openai_provider.py) — the model cannot
-    return anything outside that schema
+  - strict structured output: every AIProvider.generate_structured call
+    made along the way (see infrastructure/ai/chunked_extraction.py) uses
+    OpenAI's json_schema strict mode (infrastructure/ai/openai_provider.py)
+    — the model cannot return anything outside the schema requested for
+    that call. The final ExtractionOutput assembled here is never itself
+    sent as one response_model — its full shape is too large for strict
+    mode to reliably produce in a single call, so chunked_extraction.py
+    splits it into a menu-structure-discovery call plus one call per menu
+    category, and this node's own mapping logic is unaffected either way
   - map content into our Pydantic schemas: ExtractionOutput (AI-only,
     no ids) is translated into real core.schemas.restaurant/menu/nutrition
     objects in Python, with ids assigned here, not by the model
@@ -48,10 +53,11 @@ from core.schemas.extraction_output import (
     ExtractionOutput,
 )
 from core.schemas.menu import Dish, Ingredient, Menu, MenuCategory
-from core.schemas.nutrition import Nutrition
+from core.schemas.nutrition import Macros, Micronutrients, Nutrition
 from core.schemas.restaurant import Restaurant
 from core.schemas.source import SnapshotContentType, SourceSnapshot
 from database.repositories.agent_run_repository import AgentRunRepository
+from infrastructure.ai.chunked_extraction import run_chunked_extraction
 from infrastructure.ai.provider import AIProvider, AIProviderError
 from infrastructure.storage.base import StorageAdapter
 from workflows.collector_workflow.state import CollectorState
@@ -116,8 +122,8 @@ def _map_dish(extracted: ExtractedDish, *, category_id: uuid.UUID) -> Dish:
         image_url=extracted.image_url,
         nutrition=Nutrition(
             serving_size=extracted.nutrition.serving_size,
-            macros=extracted.nutrition.macros,
-            micronutrients=extracted.nutrition.micronutrients,
+            macros=Macros(**extracted.nutrition.macros.model_dump()),
+            micronutrients=Micronutrients(**extracted.nutrition.micronutrients.model_dump()),
         ),
         allergens=extracted.allergens,
         ingredients=[Ingredient(name=name) for name in extracted.ingredient_names if name.strip()],
@@ -196,10 +202,10 @@ def build_multimodal_translation_node(
                 raise AIProviderError("no text-readable source material available to translate")
 
             user_content = _build_user_content(materials)
-            result = await ai_provider.generate_structured(
+            result = await run_chunked_extraction(
+                ai_provider,
                 system_prompt=_SYSTEM_PROMPT,
                 user_content=user_content,
-                response_model=ExtractionOutput,
             )
         except AIProviderError as exc:
             failure_message = f"multimodal_translation failed for restaurant_id={restaurant.id}: {exc}"

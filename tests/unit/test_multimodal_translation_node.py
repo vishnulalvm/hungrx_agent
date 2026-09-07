@@ -20,9 +20,12 @@ from sqlalchemy import select
 from core.schemas.agent_run import AgentWorkflowType
 from core.schemas.audit import AuditAction, AuditEntityType
 from core.schemas.extraction_output import (
+    ExtractedCategoryDishes,
     ExtractedDish,
+    ExtractedDiscovery,
     ExtractedMenu,
     ExtractedMenuCategory,
+    ExtractedMenuCategoryStub,
     ExtractedRestaurantProfile,
     ExtractionOutput,
 )
@@ -54,7 +57,19 @@ class FakeAIProvider(AIProvider):
     """Returns a pre-configured mocked structured response and records
     every call it's asked to make (system_prompt/user_content/
     response_model) so tests can assert exactly what was sent to the
-    model — no real OpenAI call."""
+    model — no real OpenAI call.
+
+    The node under test drives extraction through
+    infrastructure.ai.chunked_extraction.run_chunked_extraction, which
+    makes a discovery call (response_model=ExtractedDiscovery) followed
+    by one call per discovered category
+    (response_model=ExtractedCategoryDishes) — not a single
+    response_model=ExtractionOutput call. This fake is configured with
+    the *assembled* ExtractionOutput a real chunked run would produce,
+    same as before this split existed, and decomposes it into the right
+    shape for whichever phase is actually being asked for, so every
+    existing test's `_sample_output()`-based setup keeps working
+    unchanged."""
 
     def __init__(self, *, output: ExtractionOutput | None = None, error: Exception | None = None) -> None:
         self._output = output
@@ -67,8 +82,46 @@ class FakeAIProvider(AIProvider):
         )
         if self._error is not None:
             raise self._error
-        assert response_model is ExtractionOutput
-        return AIProviderResult(output=self._output, model_name="fake-model-v1", overall_confidence=0.9)
+
+        if response_model is ExtractedDiscovery:
+            stubs = [
+                ExtractedMenuCategoryStub(menu_name=menu.name, category_name=category.name)
+                for menu in self._output.menus
+                for category in menu.categories
+            ]
+            return AIProviderResult(
+                output=ExtractedDiscovery(restaurant_profile=self._output.restaurant_profile, categories=stubs),
+                model_name="fake-model-v1",
+                overall_confidence=0.9,
+            )
+
+        if response_model is ExtractedCategoryDishes:
+            category_name = _category_name_from_prompt(system_prompt)
+            dishes = [
+                dish
+                for menu in self._output.menus
+                for category in menu.categories
+                if category.name == category_name
+                for dish in category.dishes
+            ]
+            return AIProviderResult(
+                output=ExtractedCategoryDishes(dishes=dishes),
+                model_name="fake-model-v1",
+                overall_confidence=0.9,
+            )
+
+        raise AssertionError(f"unexpected response_model in test: {response_model}")
+
+
+def _category_name_from_prompt(system_prompt: str) -> str:
+    # Mirrors chunked_extraction.py's _CATEGORY_INSTRUCTION_TEMPLATE:
+    # '...category "<name>" (part of "<menu>")...' — pulled back out here
+    # so the fake can route a phase-2 call to the right category's dishes
+    # without needing its own separate call-tracking state.
+    marker = 'category "'
+    start = system_prompt.index(marker) + len(marker)
+    end = system_prompt.index('"', start)
+    return system_prompt[start:end]
 
 
 def _restaurant() -> Restaurant:
@@ -129,8 +182,11 @@ class TestSendsOnlyCollectedSourceMaterial:
 
         await node({"restaurant": _restaurant(), "source_snapshots": [snapshot]})
 
-        assert len(provider.calls) == 1
-        assert "Margherita pizza $12" in provider.calls[0]["user_content"]
+        # One discovery call plus one call per discovered category
+        # (_sample_output() has a single "Pizzas" category) — every call
+        # is built from the same collected source material.
+        assert len(provider.calls) == 2
+        assert all("Margherita pizza $12" in call["user_content"] for call in provider.calls)
 
     async def test_user_content_excludes_restaurant_identity_fields(self, db_session) -> None:
         # The restaurant's name/location must never appear in what's sent
@@ -142,8 +198,8 @@ class TestSendsOnlyCollectedSourceMaterial:
 
         await node({"restaurant": _restaurant(), "source_snapshots": [snapshot]})
 
-        assert "Joe's Pizza" not in provider.calls[0]["user_content"]
-        assert "Springfield" not in provider.calls[0]["user_content"]
+        assert all("Joe's Pizza" not in call["user_content"] for call in provider.calls)
+        assert all("Springfield" not in call["user_content"] for call in provider.calls)
 
     async def test_non_html_snapshots_are_not_sent_as_text(self, db_session) -> None:
         html_snap = _snapshot(storage_path="snap-html")
@@ -154,11 +210,15 @@ class TestSendsOnlyCollectedSourceMaterial:
 
         await node({"restaurant": _restaurant(), "source_snapshots": [html_snap, pdf_snap]})
 
-        assert "%PDF" not in provider.calls[0]["user_content"]
+        assert all("%PDF" not in call["user_content"] for call in provider.calls)
 
 
 class TestStrictStructuredOutput:
-    async def test_calls_provider_with_extraction_output_response_model(self, db_session) -> None:
+    async def test_calls_provider_with_extraction_schema_response_models(self, db_session) -> None:
+        # ExtractionOutput itself is never sent as a response_model (see
+        # infrastructure/ai/chunked_extraction.py) — every individual
+        # call still uses strict structured output, just against the
+        # smaller per-phase schemas.
         snapshot = _snapshot(storage_path="snap-1")
         storage = FakeStorageAdapter({"snap-1": b"<html>menu</html>"})
         provider = FakeAIProvider(output=_sample_output(snapshot_id=str(snapshot.id)))
@@ -166,7 +226,8 @@ class TestStrictStructuredOutput:
 
         await node({"restaurant": _restaurant(), "source_snapshots": [snapshot]})
 
-        assert provider.calls[0]["response_model"] is ExtractionOutput
+        response_models = {call["response_model"] for call in provider.calls}
+        assert response_models == {ExtractedDiscovery, ExtractedCategoryDishes}
 
     async def test_provider_error_is_not_swallowed_into_fabricated_output(self, db_session) -> None:
         snapshot = _snapshot(storage_path="snap-1")

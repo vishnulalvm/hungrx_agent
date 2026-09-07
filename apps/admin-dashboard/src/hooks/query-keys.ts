@@ -16,4 +16,8 @@ export const queryKeys = {
   auditLog: {
     list: () => ["audit-log", "list"] as const,
   },
+  ingestionQueue: {
+    list: (page: number, status?: string) => ["ingestion-queue", "list", page, status ?? "all"] as const,
+    detail: (id: string) => ["ingestion-queue", "detail", id] as const,
+  },
 };

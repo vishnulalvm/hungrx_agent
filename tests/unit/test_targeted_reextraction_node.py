@@ -18,9 +18,12 @@ import pytest
 from sqlalchemy import select
 
 from core.schemas.extraction_output import (
+    ExtractedCategoryDishes,
     ExtractedDish,
+    ExtractedDiscovery,
     ExtractedMenu,
     ExtractedMenuCategory,
+    ExtractedMenuCategoryStub,
     ExtractedRestaurantProfile,
     ExtractionOutput,
 )
@@ -78,14 +81,55 @@ class FakeStorageAdapter(StorageAdapter):
 
 
 class FakeAIProvider(AIProvider):
+    """See test_multimodal_translation_node.py's FakeAIProvider for why
+    this decomposes a single configured ExtractionOutput into the
+    discovery/per-category shapes run_chunked_extraction actually
+    requests, rather than returning it directly."""
+
     def __init__(self, *, output: ExtractionOutput) -> None:
         self._output = output
         self.calls: list[dict] = []
 
     async def generate_structured(self, *, system_prompt, user_content, response_model):
-        self.calls.append({"system_prompt": system_prompt, "user_content": user_content})
-        assert response_model is ExtractionOutput
-        return AIProviderResult(output=self._output, model_name="fake-model-v1", overall_confidence=0.9)
+        self.calls.append(
+            {"system_prompt": system_prompt, "user_content": user_content, "response_model": response_model}
+        )
+
+        if response_model is ExtractedDiscovery:
+            stubs = [
+                ExtractedMenuCategoryStub(menu_name=menu.name, category_name=category.name)
+                for menu in self._output.menus
+                for category in menu.categories
+            ]
+            return AIProviderResult(
+                output=ExtractedDiscovery(restaurant_profile=self._output.restaurant_profile, categories=stubs),
+                model_name="fake-model-v1",
+                overall_confidence=0.9,
+            )
+
+        if response_model is ExtractedCategoryDishes:
+            category_name = _category_name_from_prompt(system_prompt)
+            dishes = [
+                dish
+                for menu in self._output.menus
+                for category in menu.categories
+                if category.name == category_name
+                for dish in category.dishes
+            ]
+            return AIProviderResult(
+                output=ExtractedCategoryDishes(dishes=dishes),
+                model_name="fake-model-v1",
+                overall_confidence=0.9,
+            )
+
+        raise AssertionError(f"unexpected response_model in test: {response_model}")
+
+
+def _category_name_from_prompt(system_prompt: str) -> str:
+    marker = 'category "'
+    start = system_prompt.index(marker) + len(marker)
+    end = system_prompt.index('"', start)
+    return system_prompt[start:end]
 
 
 def _restaurant() -> Restaurant:

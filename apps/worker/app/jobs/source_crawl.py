@@ -29,7 +29,17 @@ from infrastructure.queue.redis_connection import get_redis_connection
 JOB_TYPE = "source_crawl"
 
 
-async def _run(*, restaurant_id: str, source_id: str, source_url: str) -> dict[str, Any]:
+async def _crawl_and_store(*, source_id: str, source_url: str) -> dict[str, Any]:
+    """The crawl-only half of this job — fetch, hash, store, persist the
+    SourceSnapshot — with no side effect of enqueueing anything further.
+    Factored out so apps/worker/app/jobs/ingestion_queue_dispatcher.py can
+    call just this part inline (it drives the collector_workflow stage
+    itself, immediately after, within the same dispatcher job) without
+    also triggering this job's own `_run`'s enqueue of a *second*,
+    separately-scheduled collector_workflow RQ job for the same
+    restaurant — which would be both redundant and broken (that separately
+    enqueued job has no restaurant_name/official_url to work with, since
+    those only exist as the dispatcher's own in-memory locals)."""
     import uuid
 
     from infrastructure.crawler.crawler_service import CrawlerService
@@ -51,6 +61,12 @@ async def _run(*, restaurant_id: str, source_id: str, source_url: str) -> dict[s
         stored = await snapshots.create(snapshot)
         await session.commit()
 
+    return {"source_snapshot_id": str(stored.id), "content_hash": stored.content_hash}
+
+
+async def _run(*, restaurant_id: str, source_id: str, source_url: str) -> dict[str, Any]:
+    crawl_result = await _crawl_and_store(source_id=source_id, source_url=source_url)
+
     queue = get_queue(QUEUE_COLLECTOR_WORKFLOW)
     from apps.worker.app.jobs.collector_workflow import run_collector_workflow
 
@@ -58,14 +74,10 @@ async def _run(*, restaurant_id: str, source_id: str, source_url: str) -> dict[s
         run_collector_workflow,
         restaurant_id=restaurant_id,
         source_id=source_id,
-        source_snapshot_id=str(stored.id),
+        source_snapshot_id=crawl_result["source_snapshot_id"],
     )
 
-    return {
-        "source_snapshot_id": str(stored.id),
-        "content_hash": stored.content_hash,
-        "collector_workflow_job_id": enqueued.id,
-    }
+    return {**crawl_result, "collector_workflow_job_id": enqueued.id}
 
 
 def run_source_crawl(*, restaurant_id: str, source_url: str, source_id: str | None = None) -> dict[str, Any]:

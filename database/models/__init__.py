@@ -1,6 +1,7 @@
 from database.models.agent_run import AgentRun
 from database.models.audit_log import AuditLog
 from database.models.base import Base
+from database.models.ingestion_queue_item import IngestionQueueItem
 from database.models.proposed_change import Approval, ProposedChange
 from database.models.refresh_token import RefreshToken
 from database.models.restaurant import Dish, Menu, MenuCategory, Restaurant, RestaurantLocation
@@ -23,4 +24,5 @@ __all__ = [
     "Dish",
     "ProposedChange",
     "Approval",
+    "IngestionQueueItem",
 ]

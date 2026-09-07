@@ -157,24 +157,22 @@ class TestGraphExecutesEndToEnd:
         assert NODE_SOURCE_AUTHORITY in reporting_nodes
         assert "source_url" not in result
 
-    async def test_downstream_placeholder_nodes_still_report_errors(
+    async def test_a_source_authority_failure_short_circuits_downstream_nodes(
         self, db_session, storage, ai_provider, checkpointer
     ) -> None:
-        # source_authority fails closed (no restaurant on state), so
-        # every downstream node also fails closed on missing input,
-        # human_review included (it never reaches its interrupt() call
-        # since structured_json/agent_run_id are never populated).
+        # source_authority fails closed (no restaurant on state) and
+        # state["errors"] becomes non-empty — every conditional edge from
+        # source_authority through deterministic_validation routes
+        # straight to END the moment errors is non-empty (see graph.py's
+        # _route_if_no_errors), so no downstream node ever actually runs
+        # or gets a chance to report its own "precondition not met" error
+        # on top of the one real failure. Only source_authority's error
+        # is present; nothing else executed to report anything.
         graph = _build(db_session, storage, ai_provider, checkpointer)
         config = {"configurable": {"thread_id": "topology-test-3"}}
         result = await graph.ainvoke({}, config)
         reporting_nodes = {error["node"] for error in result["errors"]}
-        assert reporting_nodes == {
-            NODE_SOURCE_AUTHORITY,
-            NODE_EXTRACTION,
-            NODE_MULTIMODAL_TRANSLATION,
-            NODE_DETERMINISTIC_VALIDATION,
-            NODE_HUMAN_REVIEW,
-        }
+        assert reporting_nodes == {NODE_SOURCE_AUTHORITY}
 
     async def test_publish_does_not_run_when_approval_status_is_unset(
         self, db_session, storage, ai_provider, checkpointer
@@ -193,3 +191,28 @@ class TestGraphExecutesEndToEnd:
 
         pending_state = {"human_approval_status": ProposedChangeStatus.PENDING}
         assert _route_after_human_review(pending_state) != "publish"
+
+
+class TestRouteIfNoErrors:
+    """_route_if_no_errors is what makes a node's own reported failure
+    (state["errors"] non-empty) stop the run at END rather than letting
+    every remaining node execute anyway against preconditions it already
+    can't meet — see graph.py's module docstring for the concrete bug
+    this prevents (a failed extraction still reaching human_review with
+    an empty/garbage ProposedChange for an admin to review)."""
+
+    def test_continues_to_next_node_when_no_errors(self) -> None:
+        from workflows.collector_workflow.graph import _route_if_no_errors
+
+        route = _route_if_no_errors("extraction")
+        assert route({}) == "extraction"
+        assert route({"errors": []}) == "extraction"
+
+    def test_ends_the_run_once_errors_is_non_empty(self) -> None:
+        from langgraph.graph import END
+
+        from workflows.collector_workflow.graph import _route_if_no_errors
+
+        route = _route_if_no_errors("extraction")
+        state = {"errors": [{"node": "source_authority", "message": "boom"}]}
+        assert route(state) == END

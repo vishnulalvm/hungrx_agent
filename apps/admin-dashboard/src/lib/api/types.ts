@@ -128,6 +128,54 @@ export interface IngestionTriggerResult {
   restaurant_seed_id: string;
 }
 
+// core/schemas/ingestion_queue.py
+export type IngestionQueueStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface IngestionQueueItemInput {
+  name: string;
+  official_url: string;
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  phone?: string | null;
+}
+
+export interface IngestionQueueBulkUploadRequest {
+  items: IngestionQueueItemInput[];
+}
+
+export interface IngestionQueueItemSummary {
+  id: string;
+  batch_id: string;
+  name: string;
+  official_url: string;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  phone: string | null;
+  status: IngestionQueueStatus;
+  restaurant_seed_id: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IngestionQueueBulkUploadResult {
+  batch_id: string;
+  queued_count: number;
+  skipped_duplicate_names: string[];
+  items: IngestionQueueItemSummary[];
+}
+
+export interface IngestionQueueItemEditRequest {
+  name?: string | null;
+  official_url?: string | null;
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  phone?: string | null;
+}
+
 // core/schemas/proposed_change.py
 export type ProposedChangeEntityType =
   "restaurant" | "restaurant_location" | "menu" | "menu_category" | "dish";

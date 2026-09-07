@@ -15,10 +15,11 @@ Responsibilities:
     Extraction node uses — not a different, ad hoc capture path
   - persist every fetch as a SourceSnapshot, same as Extraction
   - send only that freshly captured material to the AI provider via
-    strict structured output (AIProvider.generate_structured with
-    response_model=ExtractionOutput) — the same strict-schema boundary
-    Multimodal Translation enforces; no restaurant identity or database
-    context beyond the raw page content is ever included in the prompt
+    strict structured output (infrastructure/ai/chunked_extraction.py's
+    run_chunked_extraction, the same discovery-then-per-category call
+    pattern and strict-schema boundary Multimodal Translation uses) — no
+    restaurant identity or database context beyond the raw page content
+    is ever included in the prompt
   - map the AI's ExtractionOutput onto the *currently published*
     Restaurant (state["restaurant"]) rather than a blank one, so fields
     the fresh crawl didn't re-report (menus untouched by whatever
@@ -48,10 +49,11 @@ from core.config.settings import Settings
 from core.schemas.audit import AuditAction, AuditEntityType
 from core.schemas.extraction_output import ExtractedDish, ExtractedMenuCategory, ExtractionOutput
 from core.schemas.menu import Dish, Ingredient, Menu, MenuCategory
-from core.schemas.nutrition import Nutrition
+from core.schemas.nutrition import Macros, Micronutrients, Nutrition
 from core.schemas.restaurant import Restaurant
 from core.schemas.source import SnapshotContentType, Source, SourceSnapshot
 from database.repositories.agent_run_repository import AgentRunRepository
+from infrastructure.ai.chunked_extraction import run_chunked_extraction
 from infrastructure.ai.provider import AIProvider, AIProviderError
 from infrastructure.crawler.domain_lock import DomainVerifier
 from infrastructure.crawler.page_discovery import find_menu_page_links
@@ -139,10 +141,10 @@ def build_targeted_reextraction_node(
             return {"errors": [{"node": NODE_NAME, "message": failure_message}]}
 
         try:
-            result = await ai_provider.generate_structured(
+            result = await run_chunked_extraction(
+                ai_provider,
                 system_prompt=_SYSTEM_PROMPT,
                 user_content=_build_user_content(materials),
-                response_model=ExtractionOutput,
             )
         except AIProviderError as exc:
             failure_message = f"targeted_reextraction AI call failed for restaurant_id={restaurant.id}: {exc}"
@@ -236,8 +238,8 @@ def _map_dish(extracted: ExtractedDish, *, category_id: uuid.UUID, source_refs: 
         image_url=extracted.image_url,
         nutrition=Nutrition(
             serving_size=extracted.nutrition.serving_size,
-            macros=extracted.nutrition.macros,
-            micronutrients=extracted.nutrition.micronutrients,
+            macros=Macros(**extracted.nutrition.macros.model_dump()),
+            micronutrients=Micronutrients(**extracted.nutrition.micronutrients.model_dump()),
         ),
         allergens=extracted.allergens,
         ingredients=[Ingredient(name=name) for name in extracted.ingredient_names if name.strip()],

@@ -34,7 +34,9 @@ from infrastructure.queue.redis_connection import get_redis_connection
 JOB_TYPE = "collector_workflow"
 
 
-async def _run(*, restaurant_id: str, restaurant_name: str, city, state, country, phone) -> dict[str, Any]:
+async def _run(
+    *, restaurant_id: str, restaurant_name: str, city, state, country, phone, official_url: str | None = None
+) -> dict[str, Any]:
     import uuid
 
     from core.schemas.restaurant import Restaurant, RestaurantLocation
@@ -50,10 +52,23 @@ async def _run(*, restaurant_id: str, restaurant_name: str, city, state, country
         locations.append(RestaurantLocation(address_line1="Unknown", city=city, state=state, country=country))
     restaurant = Restaurant(id=uuid.UUID(restaurant_id), name=restaurant_name, locations=locations)
 
+    # official_url is set only for manually-ingested restaurants (see
+    # apps/worker/app/jobs/ingestion_queue_dispatcher.py) — it swaps the
+    # graph's own source_authority node onto a provider that already knows
+    # the one right answer instead of NullEntityResolutionProvider's
+    # default, which always returns NOT_FOUND. See
+    # infrastructure/source_authority/manual_provider.py.
+    provider = None
+    if official_url is not None:
+        from infrastructure.source_authority.manual_provider import ManualUrlEntityResolutionProvider
+
+        provider = ManualUrlEntityResolutionProvider(official_url)
+
     async with session_factory() as session:
         async with get_checkpointer(settings) as checkpointer:
             graph = build_graph(
                 session,
+                provider,
                 storage=default_storage_adapter(settings),
                 ai_provider=default_ai_provider(settings),
                 checkpointer=checkpointer,
@@ -79,11 +94,15 @@ def run_collector_workflow(
     phone: str | None = None,
     source_id: str | None = None,
     source_snapshot_id: str | None = None,
+    official_url: str | None = None,
 ) -> dict[str, Any]:
     """RQ entry point. `source_id`/`source_snapshot_id` (from a preceding
     source_crawl job) are accepted for correlation/logging only — see
     module docstring for why the graph re-derives its own source state
-    rather than trusting these."""
+    rather than trusting these. `official_url` is the exception: when set
+    (manual ingestion only), it's passed to `_run` to swap the graph's
+    internal source_authority node onto a provider that already knows the
+    verified URL, rather than one that searches."""
     configure_logging(get_settings())
     job = get_current_job()
     job_id = job.id if job else "sync"
@@ -106,6 +125,7 @@ def run_collector_workflow(
                 state=state,
                 country=country,
                 phone=phone,
+                official_url=official_url,
             )
     except JobAlreadyRunningError as exc:
         log_skipped(job_id=job_id, job_type=JOB_TYPE, restaurant_id=restaurant_id, reason=str(exc))

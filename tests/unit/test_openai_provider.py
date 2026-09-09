@@ -1,13 +1,14 @@
 """Unit tests for OpenAIProvider — mocks the underlying openai SDK client
 (AsyncOpenAI.chat.completions.parse) so these tests never make a real
 network call. Covers: strict structured-output request shape, refusal
-handling, and error wrapping into AIProviderError."""
+handling, error wrapping into AIProviderError, and 429 retry/backoff."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
-from openai import APIConnectionError
+from openai import APIConnectionError, RateLimitError
 from pydantic import BaseModel
 
 from infrastructure.ai.openai_provider import OpenAIProvider
@@ -114,6 +115,82 @@ class TestWrapsTransportErrors:
             await provider.generate_structured(
                 system_prompt="system", user_content="user", response_model=_SampleOutput
             )
+
+
+def _rate_limit_error(*, retry_after: str | None = None) -> RateLimitError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    headers = {"retry-after": retry_after} if retry_after is not None else {}
+    response = httpx.Response(429, request=request, headers=headers, json={"error": {"message": "rate limited"}})
+    return RateLimitError("rate limited", response=response, body=None)
+
+
+class TestRateLimitRetry:
+    async def test_retries_after_rate_limit_and_eventually_succeeds(self, monkeypatch) -> None:
+        provider = _make_provider()
+        sleeps: list[float] = []
+        monkeypatch.setattr(
+            "infrastructure.ai.openai_provider.asyncio.sleep",
+            AsyncMock(side_effect=lambda s: sleeps.append(s)),
+        )
+        mock_parse = AsyncMock(
+            side_effect=[
+                _rate_limit_error(retry_after="2"),
+                _fake_completion(parsed=_SampleOutput(value="ok")),
+            ]
+        )
+        provider._client.chat.completions.parse = mock_parse
+
+        result = await provider.generate_structured(
+            system_prompt="system", user_content="user", response_model=_SampleOutput
+        )
+
+        assert result.output == _SampleOutput(value="ok")
+        assert mock_parse.call_count == 2
+        assert sleeps == [2.0]
+
+    async def test_gives_up_after_max_retries_and_raises_ai_provider_error(self, monkeypatch) -> None:
+        provider = _make_provider()
+        monkeypatch.setattr(
+            "infrastructure.ai.openai_provider.asyncio.sleep", AsyncMock(return_value=None)
+        )
+        provider._client.chat.completions.parse = AsyncMock(side_effect=_rate_limit_error())
+
+        with pytest.raises(AIProviderError, match="OpenAI request failed"):
+            await provider.generate_structured(
+                system_prompt="system", user_content="user", response_model=_SampleOutput
+            )
+
+    async def test_uses_fallback_wait_when_retry_after_header_missing(self, monkeypatch) -> None:
+        provider = _make_provider()
+        sleeps: list[float] = []
+        monkeypatch.setattr(
+            "infrastructure.ai.openai_provider.asyncio.sleep",
+            AsyncMock(side_effect=lambda s: sleeps.append(s)),
+        )
+        provider._client.chat.completions.parse = AsyncMock(
+            side_effect=[_rate_limit_error(), _fake_completion(parsed=_SampleOutput(value="ok"))]
+        )
+
+        await provider.generate_structured(
+            system_prompt="system", user_content="user", response_model=_SampleOutput
+        )
+
+        assert sleeps == [5.0]
+
+    async def test_a_non_rate_limit_error_is_not_retried(self, monkeypatch) -> None:
+        provider = _make_provider()
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr("infrastructure.ai.openai_provider.asyncio.sleep", sleep_mock)
+        mock_parse = AsyncMock(side_effect=APIConnectionError(request=SimpleNamespace()))
+        provider._client.chat.completions.parse = mock_parse
+
+        with pytest.raises(AIProviderError, match="OpenAI request failed"):
+            await provider.generate_structured(
+                system_prompt="system", user_content="user", response_model=_SampleOutput
+            )
+
+        assert mock_parse.call_count == 1
+        sleep_mock.assert_not_called()
 
 
 class TestConstruction:

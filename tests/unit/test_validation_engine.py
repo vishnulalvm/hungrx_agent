@@ -282,10 +282,24 @@ class TestRequiredFieldValidation:
         outcome = validate(restaurant)
         assert any(issue.code == "missing_locations" for issue in outcome.warnings)
 
-    def test_restaurant_with_no_menus_warns(self) -> None:
+    def test_restaurant_with_no_menus_is_an_error(self) -> None:
+        # Unlike every other required-field check, a restaurant with zero
+        # menus is treated as an ERROR (not a warning) — it almost always
+        # means extraction/AI translation found no usable content, not
+        # that the restaurant genuinely has no menu. See
+        # core/validation/required_fields.py's module docstring.
         restaurant = _restaurant(menus=[])
         outcome = validate(restaurant)
-        assert any(issue.code == "missing_menus" for issue in outcome.warnings)
+        assert any(issue.code == "missing_menus" for issue in outcome.errors)
+        assert not outcome.is_valid
+
+    def test_restaurant_with_menus_but_no_dishes_anywhere_is_an_error(self) -> None:
+        from core.schemas.menu import Menu, MenuCategory
+
+        restaurant = _restaurant(menus=[Menu(name="Main Menu", categories=[MenuCategory(name="Mains")])])
+        outcome = validate(restaurant)
+        assert any(issue.code == "empty_menus" for issue in outcome.errors)
+        assert not outcome.is_valid
 
     def test_dish_with_no_price_warns(self) -> None:
         dish = _dish(price=None)

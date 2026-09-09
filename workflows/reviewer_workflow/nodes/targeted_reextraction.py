@@ -67,7 +67,10 @@ NODE_NAME = "targeted_reextraction"
 
 TargetedReextractionNode = Callable[[ReviewerState], Awaitable[dict[str, Any]]]
 
-_THIN_HTML_BYTES_THRESHOLD = 2_000
+# Kept identical to workflows/collector_workflow/nodes/extraction.py's
+# threshold/rationale — see that module for why 8,000 (not the previous
+# 2,000).
+_THIN_HTML_BYTES_THRESHOLD = 8_000
 
 _SYSTEM_PROMPT = (
     "You extract restaurant menu and nutrition data from raw crawled "
@@ -196,12 +199,20 @@ async def _capture_source_material(fetcher: PageFetcher, *, source: Source) -> l
     if root_capture.snapshot.content_type != SnapshotContentType.HTML or root_capture.html is None:
         return snapshots
 
+    discovery_capture = root_capture
     if len(root_capture.html.encode("utf-8")) < _THIN_HTML_BYTES_THRESHOLD:
-        screenshot_capture = await fetcher.fetch_screenshot(source_id=source.id, url=source.url)
-        snapshots.append(screenshot_capture.snapshot)
+        # Rendered HTML, not a screenshot — see
+        # workflows/collector_workflow/nodes/extraction.py's identical
+        # fallback for why a screenshot is never useful here.
+        rendered_capture = await fetcher.fetch_rendered_html(source_id=source.id, url=source.url)
+        snapshots.append(rendered_capture.snapshot)
+        if rendered_capture.html:
+            discovery_capture = rendered_capture
 
     domain_verifier = DomainVerifier(source.url)
-    candidate_urls = find_menu_page_links(root_capture.html, base_url=source.url, domain_verifier=domain_verifier)
+    candidate_urls = find_menu_page_links(
+        discovery_capture.html, base_url=source.url, domain_verifier=domain_verifier
+    )
 
     for candidate_url in candidate_urls:
         capture = await fetcher.fetch_html_or_pdf(source_id=source.id, url=candidate_url)

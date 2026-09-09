@@ -1,0 +1,17 @@
+[
+  {
+    "name": "McDonald's",
+    "menu_url": "https://www.mcdonalds.com/menu",
+    "nutrition_url": "https://www.mcdonalds.com/us/en-us/about-our-food/nutrition-calculator.html"
+  },
+  {
+    "name": "Burger King",
+    "menu_url": "https://www.bk.com/menu",
+    "nutrition_url": "https://www.bk.com/nutrition"
+  },
+  {
+    "name": "Wendy's",
+    "menu_url": "https://www.wendys.com/menu",
+    "nutrition_url": "https://www.wendys.com/food/nutrition"
+  }
+]

@@ -21,6 +21,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from sqlalchemy import select
 
+from core.schemas.menu import Dish, Menu, MenuCategory
 from core.schemas.proposed_change import ProposedChangeStatus
 from core.schemas.restaurant import Restaurant, RestaurantLocation
 from database.models.proposed_change import ProposedChange
@@ -32,9 +33,27 @@ pytestmark = pytest.mark.asyncio
 
 
 def _restaurant() -> Restaurant:
+    category_id = uuid.uuid4()
     return Restaurant(
         name="Joe's Pizza",
         locations=[RestaurantLocation(address_line1="1 Main St", city="Springfield", country="US")],
+        # publish_node re-validates immediately before writing (see its
+        # own docstring) and refuses a restaurant with no dishes at all
+        # (core/validation/required_fields.py's missing_menus/empty_menus
+        # checks) — this fixture needs at least one real dish so these
+        # tests exercise human_review/publish routing, not that guard.
+        menus=[
+            Menu(
+                name="Main Menu",
+                categories=[
+                    MenuCategory(
+                        id=category_id,
+                        name="Pizzas",
+                        dishes=[Dish(category_id=category_id, name="Margherita")],
+                    )
+                ],
+            )
+        ],
     )
 
 

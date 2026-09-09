@@ -65,6 +65,9 @@ class FakePageFetcher(PageFetcher):
         content_type, html = self._pages[url]
         return _Capture(snapshot=self._make_snapshot(url, content_type), html=html)
 
+    async def fetch_rendered_html(self, *, source_id: uuid.UUID, url: str) -> _Capture:
+        return _Capture(snapshot=self._make_snapshot(url, SnapshotContentType.HTML), html=None)
+
     async def fetch_screenshot(self, *, source_id: uuid.UUID, url: str) -> _Capture:
         return _Capture(snapshot=self._make_snapshot(url, SnapshotContentType.SCREENSHOT), html=None)
 

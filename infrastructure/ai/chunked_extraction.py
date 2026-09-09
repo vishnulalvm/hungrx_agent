@@ -69,8 +69,13 @@ _CATEGORY_INSTRUCTION_TEMPLATE = (
 # Per-category AI calls for one extraction run happen concurrently
 # (bounded) rather than one giant sequential loop — a restaurant with a
 # large menu can have a couple dozen categories, and running those fully
-# serially would make a single collector run needlessly slow.
-_MAX_CONCURRENT_CATEGORY_CALLS = 5
+# serially would make a single collector run needlessly slow. Kept low
+# (rather than e.g. 5): every one of these calls resends the same full
+# user_content, so a higher value bursts more of a low-TPM-tier
+# account's per-minute budget in the same second — OpenAIProvider's own
+# 429 retry/backoff (infrastructure/ai/openai_provider.py) absorbs
+# what's left, but a smaller burst means fewer calls need to wait at all.
+_MAX_CONCURRENT_CATEGORY_CALLS = 2
 
 
 async def run_chunked_extraction(

@@ -11,14 +11,26 @@ Responsibilities (per the collector workflow's Agent 2 spec):
   - inspect the verified source (state["source"] / state["source_url"],
     written by the source_authority node — this node never guesses a URL
     itself)
-  - identify relevant menu/nutrition pages either from a caller-supplied
-    nutrition URL (state["nutrition_url"], manual ingestion only) or,
-    absent that, via deterministic link discovery
-    (infrastructure.crawler.page_discovery) — never AI
+  - identify relevant menu/nutrition pages via deterministic link
+    discovery (infrastructure.crawler.page_discovery) — never AI — run
+    unconditionally against the menu root, plus a caller-supplied
+    nutrition URL (state["nutrition_url"], manual ingestion only) fetched
+    explicitly *in addition to* whatever discovery finds. A caller
+    knowing the nutrition page's URL says nothing about whether the menu
+    root itself already contains real dish content or is just a category
+    index one hop away from it (confirmed against a real restaurant
+    site's menu root having zero dish/calorie content at all) — so
+    supplying nutrition_url must never skip menu-page discovery.
   - capture required source material: HTML via httpx, PDFs via httpx
-    (content-type based), and a screenshot via Playwright only when the
-    root page's HTML looks suspiciously thin (likely JS-rendered) —
-    browser automation stays an explicit fallback, not the default path
+    (content-type based), and a Playwright-rendered HTML capture only
+    when the root page's raw HTML looks suspiciously thin (likely a
+    client-side-rendered app shell) — browser automation stays an
+    explicit fallback, not the default path. The fallback fetches
+    *rendered* HTML (post-JS-execution), not a screenshot: a screenshot
+    is an image multimodal_translation never reads (see that node's
+    _read_text_materials — only HTML snapshots are sent to the AI), so a
+    screenshot-only fallback would silently capture nothing usable for a
+    JS-rendered page.
   - persist snapshots via CrawlerService/SnapshotService (SHA-256 hashed,
     stored through the StorageAdapter)
   - return source references (SourceSnapshot records) to the graph —
@@ -60,10 +72,15 @@ NODE_NAME = "extraction"
 
 ExtractionNode = Callable[[CollectorState], Awaitable[dict[str, Any]]]
 
-# A rendered page below this length is treated as likely client-side
-# rendered (an empty app shell) and worth a browser-rendered fallback
-# capture; a real menu-bearing page is essentially never this short.
-_THIN_HTML_BYTES_THRESHOLD = 2_000
+# A raw HTML page below this length is treated as likely client-side
+# rendered (an empty app shell — script tags and a bare #root/#app div,
+# no real content) and worth a browser-rendered fallback capture; a real
+# menu-bearing page is essentially never this short even with heavy
+# cookie-consent/analytics boilerplate. Confirmed against a real
+# JS-rendered restaurant site (a bare React Native Web/Expo shell) that
+# came in at ~3.4KB of raw HTML with zero menu content — comfortably
+# under this threshold, whereas the old 2,000-byte threshold missed it.
+_THIN_HTML_BYTES_THRESHOLD = 8_000
 
 
 class PageCapture(Protocol):
@@ -82,6 +99,8 @@ class PageFetcher(Protocol):
     a fake implementing this same protocol."""
 
     async def fetch_html_or_pdf(self, *, source_id: uuid.UUID, url: str) -> PageCapture: ...
+
+    async def fetch_rendered_html(self, *, source_id: uuid.UUID, url: str) -> PageCapture: ...
 
     async def fetch_screenshot(self, *, source_id: uuid.UUID, url: str) -> PageCapture: ...
 
@@ -109,19 +128,27 @@ class CrawlerServicePageFetcher:
 
     async def fetch_html_or_pdf(self, *, source_id: uuid.UUID, url: str) -> PageCapture:
         snapshot, _metadata = await self._crawler.fetch_and_store(source_id=source_id, url=url)
-        html = None
-        if snapshot.content_type == SnapshotContentType.HTML:
-            # fetch_and_store persists the bytes but doesn't hand the raw
-            # HTML back (only parsed metadata); page discovery needs the
-            # actual markup, so read the just-stored bytes back from
-            # storage rather than re-fetching over the network.
-            content = await self._storage.read(snapshot.storage_path)
-            html = content.decode("utf-8", errors="replace")
-        return _Capture(snapshot=snapshot, html=html)
+        return _Capture(snapshot=snapshot, html=await self._read_html_if_any(snapshot))
+
+    async def fetch_rendered_html(self, *, source_id: uuid.UUID, url: str) -> PageCapture:
+        snapshot, _metadata = await self._crawler.fetch_and_store(
+            source_id=source_id, url=url, use_browser=True
+        )
+        return _Capture(snapshot=snapshot, html=await self._read_html_if_any(snapshot))
 
     async def fetch_screenshot(self, *, source_id: uuid.UUID, url: str) -> PageCapture:
         snapshot = await self._crawler.capture_screenshot(source_id=source_id, url=url)
         return _Capture(snapshot=snapshot, html=None)
+
+    async def _read_html_if_any(self, snapshot: SourceSnapshot) -> str | None:
+        if snapshot.content_type != SnapshotContentType.HTML:
+            return None
+        # fetch_and_store persists the bytes but doesn't hand the raw
+        # HTML back (only parsed metadata); page discovery needs the
+        # actual markup, so read the just-stored bytes back from storage
+        # rather than re-fetching over the network.
+        content = await self._storage.read(snapshot.storage_path)
+        return content.decode("utf-8", errors="replace")
 
 
 def build_extraction_node(
@@ -188,16 +215,37 @@ def build_extraction_node(
 async def _capture_source_material(
     fetcher: PageFetcher, *, source: Source, source_url: str, nutrition_url: str | None = None
 ) -> list[SourceSnapshot]:
-    """Fetches the source (menu) page itself, then either fetches the
-    caller-supplied nutrition page explicitly (manual ingestion — see
-    CollectorState.nutrition_url) or, when none was supplied, falls back
-    to deterministic link discovery to find menu/nutrition-relevant linked
-    pages on its own. Every fetch is captured and persisted as a
-    SourceSnapshot; no content is interpreted here — only whether a page
-    looks relevant enough to capture."""
+    """Fetches the source (menu) page itself, always runs deterministic
+    link discovery from it to find menu-relevant linked pages (e.g. a
+    chain whose menu root is a bare category index — burgers, breakfast,
+    sides, etc. each on their own subpage — with zero dish-level content
+    on the root page itself: confirmed against a real restaurant site
+    where the root menu page had zero calorie/price mentions at all),
+    and additionally fetches the caller-supplied nutrition page
+    explicitly when one was given (manual ingestion — see
+    CollectorState.nutrition_url).
+
+    `nutrition_url` is deliberately just one more page to capture
+    alongside whatever link discovery finds, not a shortcut that skips
+    discovery — those are independent facts about a restaurant (whether
+    its nutrition data lives at a caller-known URL vs. whether its menu
+    content lives on the root page or one hop away), and treating
+    "caller supplied a nutrition URL" as "therefore the menu page needs
+    no further discovery" was what let the McDonald's-shaped case above
+    silently reach multimodal_translation with a category index and no
+    dishes to extract from any of them.
+
+    Every fetch is captured and persisted as a SourceSnapshot; no
+    content is interpreted here — only whether a page looks relevant
+    enough to capture."""
 
     root_capture = await fetcher.fetch_html_or_pdf(source_id=source.id, url=source_url)
     snapshots = [root_capture.snapshot]
+    # Which capture's HTML link discovery should run against below —
+    # normally the raw fetch, but the rendered one once a thin-page
+    # fallback replaces it (a client-side-rendered page's real nav links
+    # often don't exist in the raw HTML at all, only post-render).
+    discovery_capture = root_capture
 
     is_thin_html = (
         root_capture.snapshot.content_type == SnapshotContentType.HTML
@@ -205,20 +253,24 @@ async def _capture_source_material(
         and len(root_capture.html.encode("utf-8")) < _THIN_HTML_BYTES_THRESHOLD
     )
     if is_thin_html:
-        # Likely a client-side-rendered shell; fall back to a
-        # browser-rendered screenshot capture of the same page rather
-        # than silently returning an near-empty snapshot.
-        screenshot_capture = await fetcher.fetch_screenshot(source_id=source.id, url=source_url)
-        snapshots.append(screenshot_capture.snapshot)
+        # Likely a client-side-rendered shell (e.g. a bare React/Expo
+        # #root div with no server-rendered content); fall back to a
+        # Playwright-rendered HTML capture of the same page — rendered
+        # HTML, not a screenshot, since a screenshot is an image
+        # multimodal_translation never reads (see that node's
+        # _read_text_materials).
+        rendered_capture = await fetcher.fetch_rendered_html(source_id=source.id, url=source_url)
+        snapshots.append(rendered_capture.snapshot)
+        if rendered_capture.html:
+            discovery_capture = rendered_capture
 
     if nutrition_url is not None:
         domain_verifier = DomainVerifier(source.url)
         domain_verifier.assert_allowed(nutrition_url)
         nutrition_capture = await fetcher.fetch_html_or_pdf(source_id=source.id, url=nutrition_url)
         snapshots.append(nutrition_capture.snapshot)
-        return snapshots
 
-    if root_capture.snapshot.content_type != SnapshotContentType.HTML or root_capture.html is None:
+    if discovery_capture.snapshot.content_type != SnapshotContentType.HTML or discovery_capture.html is None:
         # A PDF (or an HTML fetch whose body we couldn't read back) is
         # already the whole capture — there's no <head>/<a> structure to
         # run link discovery against.
@@ -226,10 +278,12 @@ async def _capture_source_material(
 
     domain_verifier = DomainVerifier(source.url)
     candidate_urls = find_menu_page_links(
-        root_capture.html, base_url=source_url, domain_verifier=domain_verifier
+        discovery_capture.html, base_url=source_url, domain_verifier=domain_verifier
     )
 
     for candidate_url in candidate_urls:
+        if candidate_url == nutrition_url:
+            continue  # already captured explicitly above
         capture = await fetcher.fetch_html_or_pdf(source_id=source.id, url=candidate_url)
         snapshots.append(capture.snapshot)
 

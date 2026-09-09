@@ -199,6 +199,19 @@ async def _dispatch_one_cycle_async() -> dict[str, Any]:
 
     try:
         result = await _run_one_item(item_id)
+        # The collector graph reports a node failure (e.g.
+        # deterministic_validation finding no menus/dishes — see
+        # workflows/collector_workflow/graph.py's _route_if_no_errors) by
+        # returning {"errors": [...]} on its result rather than raising —
+        # that's what lets the graph route straight to END with the
+        # AgentRun already marked FAILED, instead of raising out of
+        # ainvoke(). _run_one_item propagates that list through
+        # unchanged, so it must be checked here explicitly: without this,
+        # a run that produced no usable data would still mark the queue
+        # item SUCCEEDED just because no Python exception was raised.
+        node_errors = result.get("errors") or []
+        if node_errors:
+            raise RuntimeError("; ".join(err.get("message", str(err)) for err in node_errors))
     except Exception as exc:
         async with session_factory() as session:
             await IngestionQueueRepository(session).mark_failed(item_id, error_message=str(exc))

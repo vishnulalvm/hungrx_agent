@@ -123,6 +123,54 @@ class TestDispatchOneCycle:
         assert refreshed.status == IngestionQueueStatus.FAILED
         assert refreshed.error_message == "crawl failed"
 
+    async def test_item_with_node_errors_but_no_exception_is_marked_failed(
+        self, db_session, monkeypatch
+    ) -> None:
+        # The collector graph reports a node failure (e.g.
+        # deterministic_validation finding no menus) by returning
+        # {"errors": [...]} rather than raising — _run_one_item
+        # propagates that unchanged. Without checking it explicitly, the
+        # dispatcher would mark this item SUCCEEDED just because no
+        # Python exception was raised, even though no usable restaurant
+        # data was ever produced.
+        monkeypatch.setattr(
+            "apps.worker.app.jobs.ingestion_queue_dispatcher.get_sessionmaker",
+            lambda: (lambda: _NonClosingSessionCtx(db_session)),
+        )
+
+        repo = IngestionQueueRepository(db_session)
+        batch = await repo.create_batch(items=[_item("A")], created_by_user_id=None)
+        await db_session.commit()
+        item_id = batch.created[0].id
+
+        from apps.worker.app.jobs import ingestion_queue_dispatcher as dispatcher
+
+        fake_outcome = {
+            "restaurant_id": "11111111-1111-1111-1111-111111111111",
+            "source_id": "22222222-2222-2222-2222-222222222222",
+            "source_snapshot_id": "33333333-3333-3333-3333-333333333333",
+            "agent_run_id": "44444444-4444-4444-4444-444444444444",
+            "published_restaurant_id": None,
+            "errors": [
+                {
+                    "node": "deterministic_validation",
+                    "message": "deterministic_validation found 1 error(s): Restaurant has no menus.",
+                }
+            ],
+        }
+
+        with patch.object(dispatcher, "_run_one_item", AsyncMock(return_value=fake_outcome)), patch.object(
+            dispatcher, "get_queue"
+        ) as mock_get_queue:
+            result = await dispatcher._dispatch_one_cycle_async()
+
+        assert result["status"] == "failed"
+        mock_get_queue.return_value.enqueue.assert_called_once()
+
+        refreshed = await repo.get_by_id(item_id)
+        assert refreshed.status == IngestionQueueStatus.FAILED
+        assert "Restaurant has no menus" in refreshed.error_message
+
     async def test_only_one_item_claimed_per_cycle_leaving_the_second_untouched(
         self, db_session, monkeypatch
     ) -> None:

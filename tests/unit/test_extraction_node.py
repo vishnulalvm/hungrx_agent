@@ -4,7 +4,7 @@ fake PageFetcher, so behavior is exercised through the actual node
 function without any real network or browser calls.
 
 Covers: HTML flow (link discovery + fetching candidates), PDF flow (no
-link discovery), thin-HTML screenshot fallback, snapshot persistence
+link discovery), thin-HTML rendered-HTML fallback, snapshot persistence
 references returned to the graph, and failure handling (missing source,
 fetch errors) — never AI interpretation, which is explicitly out of
 scope for this node.
@@ -44,12 +44,15 @@ class FakePageFetcher(PageFetcher):
         pages: dict[str, tuple[SnapshotContentType, str | None]],
         source_id: uuid.UUID,
         fail_on: set[str] | None = None,
+        rendered_pages: dict[str, str] | None = None,
     ) -> None:
         self._pages = pages
         self._source_id = source_id
         self._fail_on = fail_on or set()
+        self._rendered_pages = rendered_pages or {}
         self.html_or_pdf_calls: list[str] = []
         self.screenshot_calls: list[str] = []
+        self.rendered_html_calls: list[str] = []
 
     def _make_snapshot(self, url: str, content_type: SnapshotContentType) -> SourceSnapshot:
         return SourceSnapshot(
@@ -69,6 +72,11 @@ class FakePageFetcher(PageFetcher):
         content_type, html = self._pages[url]
         return _Capture(snapshot=self._make_snapshot(url, content_type), html=html)
 
+    async def fetch_rendered_html(self, *, source_id: uuid.UUID, url: str) -> _Capture:
+        self.rendered_html_calls.append(url)
+        html = self._rendered_pages.get(url)
+        return _Capture(snapshot=self._make_snapshot(url, SnapshotContentType.HTML), html=html)
+
     async def fetch_screenshot(self, *, source_id: uuid.UUID, url: str) -> _Capture:
         self.screenshot_calls.append(url)
         return _Capture(snapshot=self._make_snapshot(url, SnapshotContentType.SCREENSHOT), html=None)
@@ -85,7 +93,10 @@ def _source(restaurant_id: uuid.UUID | None = None) -> Source:
 
 _RICH_HTML = (
     "<html><head><title>Joe's Pizza</title></head><body>"
-    + "<p>" + ("Welcome to Joe's Pizza. " * 200) + "</p>"
+    # Comfortably over _THIN_HTML_BYTES_THRESHOLD (8,000 bytes) — real
+    # server-rendered menu pages are essentially always this size or
+    # larger even before counting actual menu content.
+    + "<p>" + ("Welcome to Joe's Pizza. " * 500) + "</p>"
     + '<a href="/menu">Our Menu</a>'
     + '<a href="/nutrition">Nutrition Info</a>'
     + '<a href="/about">About Us</a>'
@@ -153,13 +164,32 @@ class TestPdfFlow:
         assert fetcher.screenshot_calls == []
 
 
-class TestThinHtmlScreenshotFallback:
-    async def test_thin_html_triggers_a_screenshot_capture(self, db_session) -> None:
+class TestThinHtmlRenderedFallback:
+    """A thin raw-HTML root capture (likely a client-side-rendered app
+    shell) falls back to a Playwright-*rendered* HTML capture, never a
+    screenshot — multimodal_translation only ever reads HTML snapshots
+    (see that node's _read_text_materials), so a screenshot-only
+    fallback would silently capture nothing the AI could use."""
+
+    async def test_thin_html_triggers_a_rendered_html_capture_not_a_screenshot(self, db_session) -> None:
+        # The rendered capture's HTML is also what link discovery runs
+        # against (the raw/thin HTML has no real <a> tags at all in a
+        # client-side-rendered page) — so this fixture's rendered HTML
+        # links to /menu, and the fake must be able to serve that page
+        # too for the node to succeed end-to-end.
         source = _source()
-        thin_html = "<html><body>Loading...</body></html>"
+        thin_html = "<html><body><div id='root'></div></body></html>"
+        rendered_html = (
+            "<html><body><div id='root'><h1>Joe's Pizza</h1>"
+            '<a href="/menu">Menu</a></div></body></html>'
+        )
         fetcher = FakePageFetcher(
-            pages={"https://joes-pizza.com/": (SnapshotContentType.HTML, thin_html)},
+            pages={
+                "https://joes-pizza.com/": (SnapshotContentType.HTML, thin_html),
+                "https://joes-pizza.com/menu": (SnapshotContentType.HTML, "<html>menu</html>"),
+            },
             source_id=source.id,
+            rendered_pages={"https://joes-pizza.com/": rendered_html},
         )
         node = build_extraction_node(
             db_session, storage=None, settings=None, page_fetcher_factory=lambda domain: fetcher
@@ -167,11 +197,17 @@ class TestThinHtmlScreenshotFallback:
 
         update = await node({"source": source, "source_url": "https://joes-pizza.com/"})
 
-        assert fetcher.screenshot_calls == ["https://joes-pizza.com/"]
-        content_types = {snap.content_type for snap in update["source_snapshots"]}
-        assert SnapshotContentType.SCREENSHOT in content_types
+        assert "errors" not in update
+        assert fetcher.rendered_html_calls == ["https://joes-pizza.com/"]
+        assert fetcher.screenshot_calls == []
+        # Discovery ran against the *rendered* HTML, not the thin raw
+        # HTML — proven by /menu (only linked from rendered_html) having
+        # actually been fetched.
+        assert "https://joes-pizza.com/menu" in fetcher.html_or_pdf_calls
+        content_types = [snap.content_type for snap in update["source_snapshots"]]
+        assert content_types.count(SnapshotContentType.HTML) == 3
 
-    async def test_rich_html_does_not_trigger_a_screenshot(self, db_session) -> None:
+    async def test_rich_html_does_not_trigger_the_rendered_html_fallback(self, db_session) -> None:
         source = _source()
         fetcher = FakePageFetcher(
             pages={"https://joes-pizza.com/": (SnapshotContentType.HTML, _RICH_HTML)},
@@ -183,6 +219,7 @@ class TestThinHtmlScreenshotFallback:
 
         await node({"source": source, "source_url": "https://joes-pizza.com/"})
 
+        assert fetcher.rendered_html_calls == []
         assert fetcher.screenshot_calls == []
 
 
@@ -209,12 +246,26 @@ class TestReturnsSourceReferencesOnly:
 
 
 class TestExplicitNutritionUrl:
-    async def test_fetches_nutrition_url_directly_without_link_discovery(self, db_session) -> None:
+    async def test_fetches_nutrition_url_explicitly_alongside_discovered_menu_links(self, db_session) -> None:
+        # nutrition_url is an *additional* explicit fetch, not a shortcut
+        # that skips menu-page link discovery — a caller knowing the
+        # nutrition page's URL says nothing about whether the menu root
+        # itself contains real dish content or is just a category index
+        # (see extraction.py's module docstring for the real-world case
+        # this guards against: a chain whose menu root had zero dish
+        # content, with everything one hop away via link discovery).
         source = _source()
         fetcher = FakePageFetcher(
             pages={
                 "https://joes-pizza.com/menu": (SnapshotContentType.HTML, _RICH_HTML),
                 "https://joes-pizza.com/nutrition-facts": (SnapshotContentType.HTML, "<html>nutrition</html>"),
+                # Discovered from _RICH_HTML's own <a href="/menu">/
+                # <a href="/nutrition"> links (distinct from the explicit
+                # nutrition_url below) — proves discovery actually ran
+                # rather than being skipped. (/about is not menu-keyword
+                # matching, so find_menu_page_links correctly excludes
+                # it — not part of what this test checks.)
+                "https://joes-pizza.com/nutrition": (SnapshotContentType.HTML, "<html>discovered</html>"),
             },
             source_id=source.id,
         )
@@ -231,15 +282,46 @@ class TestExplicitNutritionUrl:
         )
 
         assert "errors" not in update
-        assert fetcher.html_or_pdf_calls == [
-            "https://joes-pizza.com/menu",
-            "https://joes-pizza.com/nutrition-facts",
-        ]
-        # Link discovery is skipped entirely — the rich HTML's /menu and
-        # /about links are never fetched once an explicit nutrition_url
-        # is supplied.
-        assert "https://joes-pizza.com/menu" == fetcher.html_or_pdf_calls[0]
-        assert len(fetcher.html_or_pdf_calls) == 2
+        # The explicit nutrition_url was fetched...
+        assert "https://joes-pizza.com/nutrition-facts" in fetcher.html_or_pdf_calls
+        # ...and link discovery still ran against the menu root and
+        # fetched the distinct /nutrition link it found there too —
+        # proof discovery wasn't skipped just because nutrition_url was
+        # supplied.
+        assert "https://joes-pizza.com/nutrition" in fetcher.html_or_pdf_calls
+        assert fetcher.html_or_pdf_calls.count("https://joes-pizza.com/nutrition-facts") == 1
+
+    async def test_nutrition_url_not_duplicated_when_also_discovered(self, db_session) -> None:
+        # find_menu_page_links would discover the same URL nutrition_url
+        # already names (a real link on the menu page pointing at the
+        # exact nutrition page the caller supplied) — must be fetched
+        # only once, not twice.
+        source = _source()
+        html_linking_to_nutrition = _RICH_HTML.replace(
+            '<a href="/nutrition">Nutrition Info</a>', '<a href="/nutrition-facts">Nutrition Info</a>'
+        )
+        fetcher = FakePageFetcher(
+            pages={
+                "https://joes-pizza.com/menu": (SnapshotContentType.HTML, html_linking_to_nutrition),
+                "https://joes-pizza.com/nutrition-facts": (SnapshotContentType.HTML, "<html>nutrition</html>"),
+                "https://joes-pizza.com/about": (SnapshotContentType.HTML, "<html>about</html>"),
+            },
+            source_id=source.id,
+        )
+        node = build_extraction_node(
+            db_session, storage=None, settings=None, page_fetcher_factory=lambda domain: fetcher
+        )
+
+        update = await node(
+            {
+                "source": source,
+                "source_url": "https://joes-pizza.com/menu",
+                "nutrition_url": "https://joes-pizza.com/nutrition-facts",
+            }
+        )
+
+        assert "errors" not in update
+        assert fetcher.html_or_pdf_calls.count("https://joes-pizza.com/nutrition-facts") == 1
 
     async def test_rejects_nutrition_url_outside_verified_domain(self, db_session) -> None:
         source = _source()

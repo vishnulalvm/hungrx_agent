@@ -6,15 +6,21 @@ resolved addresses — SSRF/cloud-metadata protection), and
 RobotsChecker + DomainLock (politeness/rate-limiting) before a request
 is made.
 
-When `flaresolverr_url` is configured (see core/config/settings.py), a
-direct response that looks like a Cloudflare JS challenge (403/503 plus
-a Cloudflare marker — see `_looks_like_cloudflare_challenge`) is retried
-exactly once through FlareSolverr instead of being returned/raised as a
-failure. FlareSolverr runs its own headless browser to solve the
-challenge and hands back the resulting HTML — it does its own outbound
-fetch from inside its own container, so this is only ever used for a
-URL that already passed `_validate_target` (domain-verified,
-SSRF-checked) on this call.
+When `flaresolverr_url` is configured (see core/config/settings.py), two
+distinct failure shapes are retried once through FlareSolverr instead of
+being returned/raised as a failure:
+  - a direct response that looks like a Cloudflare JS challenge (403/503
+    plus a Cloudflare marker — see `_looks_like_cloudflare_challenge`)
+  - the direct request failing outright with an httpx.TransportError —
+    confirmed against a real restaurant site whose bot-management
+    (Akamai) rejects the connection at the HTTP/2 protocol level before
+    any response comes back at all, which the status-code/body check
+    above can never catch since there's no response to inspect
+FlareSolverr runs its own headless browser (a real Chromium connection,
+not raw httpx) to get past both cases and hands back the resulting HTML
+— it does its own outbound fetch from inside its own container, so this
+is only ever used for a URL that already passed `_validate_target`
+(domain-verified, SSRF-checked) on this call.
 """
 
 from urllib.parse import urljoin
@@ -190,29 +196,50 @@ class HttpFetcher:
         current_url = url
         for _ in range(_MAX_REDIRECTS + 1):
             async with self._domain_lock.throttled(current_url):
-                async with self._client.stream("GET", current_url) as response:
-                    if response.has_redirect_location:
-                        next_url = urljoin(current_url, response.headers["location"])
-                        await self._validate_target(next_url)
-                        current_url = next_url
-                        continue
+                try:
+                    async with self._client.stream("GET", current_url) as response:
+                        if response.has_redirect_location:
+                            next_url = urljoin(current_url, response.headers["location"])
+                            await self._validate_target(next_url)
+                            current_url = next_url
+                            continue
 
-                    content = await self._read_capped(response)
+                        content = await self._read_capped(response)
 
-                    if self._flaresolverr_client is not None and _looks_like_cloudflare_challenge(
-                        status_code=response.status_code, headers=response.headers, body=content
-                    ):
-                        solved = await self._fetch_via_flaresolverr(current_url)
-                        if solved is not None:
-                            return solved
+                        if self._flaresolverr_client is not None and _looks_like_cloudflare_challenge(
+                            status_code=response.status_code, headers=response.headers, body=content
+                        ):
+                            solved = await self._fetch_via_flaresolverr(current_url)
+                            if solved is not None:
+                                return solved
 
-                    return FetchResult(
-                        url=str(response.url),
-                        content_type=_classify_content_type(response.headers.get("content-type")),
-                        content=content,
-                        http_status=response.status_code,
-                        content_length_bytes=len(content),
-                    )
+                        return FetchResult(
+                            url=str(response.url),
+                            content_type=_classify_content_type(response.headers.get("content-type")),
+                            content=content,
+                            http_status=response.status_code,
+                            content_length_bytes=len(content),
+                        )
+                except httpx.TransportError as exc:
+                    # Some bot-management (e.g. confirmed against a real
+                    # restaurant site protected by Akamai) rejects the
+                    # connection outright at the transport/HTTP-2 level —
+                    # no response ever comes back for
+                    # _looks_like_cloudflare_challenge to inspect, so
+                    # that check alone can never catch this class of
+                    # block. FlareSolverr's own real Chromium connection
+                    # succeeds where a bare httpx client is fingerprinted
+                    # and blocked, so it's worth trying here too — but
+                    # only when configured, and the original exception is
+                    # what propagates if FlareSolverr can't solve it
+                    # either (there's no direct-fetch response to fall
+                    # back to in this branch, unlike the 403/503 case).
+                    if self._flaresolverr_client is None:
+                        raise
+                    solved = await self._fetch_via_flaresolverr(current_url)
+                    if solved is None:
+                        raise
+                    return solved
 
         raise TooManyRedirectsError(f"Exceeded {_MAX_REDIRECTS} redirects fetching {url!r}")
 

@@ -42,9 +42,24 @@ class BrowserFetcher:
         if self._playwright is not None:
             await self._playwright.stop()
 
+    # After the page's "load" event, a short settle delay for
+    # client-side rendering (React/etc. mounting and fetching its own
+    # data) to complete before the DOM is read back.
+    _POST_LOAD_SETTLE_MS = 5_000
+
     async def fetch_rendered_html(self, url: str) -> FetchResult:
-        """Navigates to `url`, waits for the network to settle, and
-        returns the fully rendered DOM as HTML."""
+        """Navigates to `url` and returns the fully rendered DOM as HTML.
+
+        Waits for the "load" event plus a fixed settle delay, not
+        Playwright's "networkidle" — confirmed against a real
+        JS-rendered restaurant site (a React/Expo SPA) that never
+        reaches networkidle at all within any reasonable timeout
+        (persistent analytics/websocket connections keep the network
+        busy indefinitely), which made every rendered-HTML fetch for
+        that class of site time out and fail outright rather than
+        return the (already fully rendered) content that was ready
+        seconds earlier.
+        """
         self._domain_verifier.assert_allowed(url)
         assert self._browser is not None, "BrowserFetcher must be used as an async context manager"
 
@@ -52,7 +67,8 @@ class BrowserFetcher:
             page = await self._browser.new_page(user_agent=self._user_agent)
             try:
                 page.set_default_navigation_timeout(self._navigation_timeout_ms)
-                response = await page.goto(url, wait_until="networkidle")
+                response = await page.goto(url, wait_until="load")
+                await page.wait_for_timeout(self._POST_LOAD_SETTLE_MS)
                 html = await page.content()
                 status = response.status if response is not None else None
             finally:

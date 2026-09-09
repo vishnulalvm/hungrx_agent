@@ -226,6 +226,76 @@ class TestFlareSolverrFallback:
         assert b"Cloudflare" in result.content
 
 
+class TestFlareSolverrTransportErrorFallback:
+    """Some bot-management rejects the connection outright (no HTTP
+    response at all) rather than returning a 403/503 challenge page —
+    confirmed against a real restaurant site whose Akamai protection
+    resets the connection at the HTTP/2 protocol level. This is a
+    distinct trigger from TestFlareSolverrFallback's status-code check,
+    since there's no response for that check to inspect."""
+
+    def _fetcher_with_flaresolverr(
+        self, handler, flaresolverr_handler, *, monkeypatch, resolve_map: dict[str, str]
+    ) -> HttpFetcher:
+        monkeypatch.setattr(ssrf_guard, "_resolve", _resolve_map(resolve_map))
+        return HttpFetcher(
+            domain_verifier=DomainVerifier("example.com"),
+            domain_lock=DomainLock(min_interval_seconds=0.0),
+            user_agent="test-agent",
+            respect_robots=False,
+            transport=httpx.MockTransport(handler),
+            flaresolverr_url="http://flaresolverr:8191",
+            flaresolverr_transport=httpx.MockTransport(flaresolverr_handler),
+        )
+
+    async def test_falls_back_to_flaresolverr_on_a_transport_error(self, monkeypatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("connection reset", request=request)
+
+        def flaresolverr_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "solution": {
+                        "url": "https://example.com/menu",
+                        "status": 200,
+                        "response": "<html>real menu</html>",
+                    },
+                },
+            )
+
+        fetcher = self._fetcher_with_flaresolverr(
+            handler, flaresolverr_handler, monkeypatch=monkeypatch, resolve_map={"example.com": "93.184.216.34"}
+        )
+        result = await fetcher.fetch("https://example.com/menu")
+
+        assert result.content == b"<html>real menu</html>"
+
+    async def test_reraises_the_transport_error_when_flaresolverr_also_fails(self, monkeypatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("connection reset", request=request)
+
+        def flaresolverr_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"status": "error", "message": "could not solve"})
+
+        fetcher = self._fetcher_with_flaresolverr(
+            handler, flaresolverr_handler, monkeypatch=monkeypatch, resolve_map={"example.com": "93.184.216.34"}
+        )
+
+        with pytest.raises(httpx.ReadTimeout):
+            await fetcher.fetch("https://example.com/menu")
+
+    async def test_transport_error_propagates_when_flaresolverr_not_configured(self, monkeypatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("connection reset", request=request)
+
+        fetcher = _fetcher(handler, monkeypatch=monkeypatch, resolve_map={"example.com": "93.184.216.34"})
+
+        with pytest.raises(httpx.ReadTimeout):
+            await fetcher.fetch("https://example.com/menu")
+
+
 class TestResponseSizeCap:
     async def test_rejects_oversized_content_length(self, monkeypatch) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
